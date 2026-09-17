@@ -101,6 +101,23 @@ struct ResonatorMode: Identifiable {
     var targetDistanceHz: Double = .infinity
 }
 
+// MARK: - Pipeline Stage Reporting
+
+enum PipelineStageStatus: String {
+    case pending = "PENDING"
+    case active = "ACTIVE"
+    case done = "DONE"
+    case skipped = "SKIPPED"
+}
+
+struct PipelineStageInfo: Identifiable {
+    let id = UUID()
+    var order: Int
+    var name: String
+    var detail: String
+    var status: PipelineStageStatus
+}
+
 // MARK: - Canonical Machine State
 
 struct QuarkResonatorState {
@@ -197,6 +214,9 @@ struct QuarkResonatorState {
     var running: Bool = false
 
     var statusMessage: String = "READY"
+
+    // Pipeline reporting
+    var pipelineStages: [PipelineStageInfo] = []
 }
 
 // MARK: - Engine
@@ -214,10 +234,12 @@ final class QuarkResonatorEngine: ObservableObject {
     private var sweepFrequencyHz: Double = 0.0
     private var sweepBestFrequencyHz: Double = 0.0
     private var sweepBestResponse: Double = 0.0
+    private var sweepBestTargetDistanceHz: Double = .infinity
     private var sweepHasStarted = false
 
     init() {
         updateConfiguration(configuration)
+        updatePipelineStages()
     }
 
     // MARK: Configuration
@@ -331,6 +353,7 @@ final class QuarkResonatorEngine: ObservableObject {
         sweepFrequencyHz = max(configuration.sweepStartFrequencyHz, 1.0)
         sweepBestFrequencyHz = sweepFrequencyHz
         sweepBestResponse = 0.0
+        sweepBestTargetDistanceHz = .infinity
         sweepHasStarted = true
 
         state.frequencySearchActive = true
@@ -341,6 +364,13 @@ final class QuarkResonatorEngine: ObservableObject {
         state.statusMessage = "SEARCHING FREQUENCY"
     }
 
+    /// Advances the sweep by one of the ~200 discrete steps between
+    /// `sweepStartFrequencyHz` and `sweepEndFrequencyHz`. Rather than locking
+    /// onto whichever sampled frequency happens to produce the highest
+    /// resonance response, the resonator drive is optimized to select
+    /// whichever of the ~200 sampled frequencies lands *closest* to the
+    /// target frequency — minimizing frequency error before the driven
+    /// dynamics ever begin.
     func advanceFrequencySweep() {
         guard sweepHasStarted else {
             startFrequencySweep()
@@ -348,10 +378,12 @@ final class QuarkResonatorEngine: ObservableObject {
         }
 
         let response = calculateResonanceResponse(frequencyHz: sweepFrequencyHz)
+        let distanceToTargetHz = abs(sweepFrequencyHz - state.targetFrequencyHz)
 
-        if response > sweepBestResponse {
-            sweepBestResponse = response
+        if distanceToTargetHz < sweepBestTargetDistanceHz {
+            sweepBestTargetDistanceHz = distanceToTargetHz
             sweepBestFrequencyHz = sweepFrequencyHz
+            sweepBestResponse = response
         }
 
         state.sweepFrequencyHz = sweepFrequencyHz
@@ -621,6 +653,179 @@ final class QuarkResonatorEngine: ObservableObject {
         increasePowerIfInsufficient(deltaTime: deltaTime)
         calculateElectricalPower()
         // Note: energy is NOT integrated a second time
+
+        updatePipelineStages()
+    }
+
+    // MARK: Pipeline Stage Reporting
+
+    private func pipelineFrequency(_ value: Double) -> String {
+        guard value.isFinite else { return "∞" }
+        return String(format: "%.4e Hz", value)
+    }
+
+    private func pipelinePower(_ value: Double) -> String {
+        guard value.isFinite else { return "∞" }
+        return String(format: "%.4e W", value)
+    }
+
+    private func pipelineEnergy(_ value: Double) -> String {
+        guard value.isFinite else { return "∞" }
+        return String(format: "%.4e J", value)
+    }
+
+    private func pipelineScientific(_ value: Double) -> String {
+        guard value.isFinite else { return "∞" }
+        return String(format: "%.4e", value)
+    }
+
+    /// Builds a live, ordered report of every stage the simulation pipeline
+    /// executes each tick, mirroring the actual call sequence in `step()`.
+    private func updatePipelineStages() {
+        var stages: [PipelineStageInfo] = []
+
+        // 1. Electrical input
+        stages.append(PipelineStageInfo(
+            order: 1,
+            name: "Electrical Input",
+            detail: "\(String(format: "%.3f V", state.inputVoltageV)) · " +
+                    "\(String(format: "%.4f A", state.inputCurrentA)) · " +
+                    pipelinePower(state.inputPowerW),
+            status: state.running ? .done : .pending
+        ))
+
+        // 2. Energy integration
+        stages.append(PipelineStageInfo(
+            order: 2,
+            name: "Energy Integration",
+            detail: "Accumulated \(pipelineEnergy(state.inputEnergyJ))",
+            status: state.running ? .done : .pending
+        ))
+
+        // 3. Frequency search
+        if state.frequencySearchActive {
+            stages.append(PipelineStageInfo(
+                order: 3,
+                name: "Frequency Search",
+                detail: "Sweeping \(pipelineFrequency(state.sweepFrequencyHz)) · " +
+                        "best \(pipelineFrequency(state.bestResponseFrequencyHz))",
+                status: .active
+            ))
+        } else if state.frequencySearchCompleted {
+            stages.append(PipelineStageInfo(
+                order: 3,
+                name: "Frequency Search",
+                detail: "Complete · locked best \(pipelineFrequency(state.bestResponseFrequencyHz))",
+                status: .done
+            ))
+        } else {
+            stages.append(PipelineStageInfo(
+                order: 3,
+                name: "Frequency Search",
+                detail: "Waiting for START",
+                status: .pending
+            ))
+        }
+
+        // 4. Driven resonator dynamics
+        if state.frequencySearchCompleted {
+            stages.append(PipelineStageInfo(
+                order: 4,
+                name: "Resonator Drive",
+                detail: "Amplitude \(pipelineScientific(state.amplitude)) m · " +
+                        "phase \(String(format: "%.3f", state.phase)) rad",
+                status: .active
+            ))
+        } else {
+            stages.append(PipelineStageInfo(
+                order: 4,
+                name: "Resonator Drive",
+                detail: "Idle until a resonant mode is found",
+                status: .skipped
+            ))
+        }
+
+        // 5. Stored energy / QRTL coupling
+        stages.append(PipelineStageInfo(
+            order: 5,
+            name: "Stored Energy",
+            detail: "\(pipelineEnergy(state.storedEnergyJ)) stored · " +
+                    "QRTL \(pipelineEnergy(state.qrtlEnergyJ))",
+            status: state.running ? .done : .pending
+        ))
+
+        // 6. Loss / Q / bandwidth
+        stages.append(PipelineStageInfo(
+            order: 6,
+            name: "Loss & Quality Factor",
+            detail: "Loss \(pipelinePower(state.lossPowerW)) · " +
+                    "Q \(pipelineScientific(state.qualityFactor))",
+            status: state.running ? .done : .pending
+        ))
+
+        // 7. Mode identification
+        stages.append(PipelineStageInfo(
+            order: 7,
+            name: "Mode Identification",
+            detail: state.resonantModeDetected
+                ? "Mode \(state.resonantModeOrder) @ \(pipelineFrequency(state.resonantModeFrequencyHz))"
+                : "No mode above resonance threshold",
+            status: state.running ? .done : .pending
+        ))
+
+        // 8. Hydrogen / QRTL excitation response
+        if !state.qrtlEnabled {
+            stages.append(PipelineStageInfo(
+                order: 8,
+                name: "Hydrogen Response",
+                detail: "QRTL disabled",
+                status: .skipped
+            ))
+        } else if state.targetModeDetected {
+            stages.append(PipelineStageInfo(
+                order: 8,
+                name: "Hydrogen Response",
+                detail: "Excited \(String(format: "%.2f%%", state.hydrogenExcitedPopulation * 100))",
+                status: .active
+            ))
+        } else {
+            stages.append(PipelineStageInfo(
+                order: 8,
+                name: "Hydrogen Response",
+                detail: "Waiting for target-frequency lock",
+                status: .pending
+            ))
+        }
+
+        // 9. Required power calculation
+        stages.append(PipelineStageInfo(
+            order: 9,
+            name: "Required Power",
+            detail: "Needs \(pipelinePower(state.requiredInputPowerW)) · " +
+                    "deficit \(pipelinePower(state.powerDeficitW))",
+            status: state.running ? .done : .pending
+        ))
+
+        // 10. Automatic power feedback
+        if !configuration.powerFeedbackEnabled {
+            stages.append(PipelineStageInfo(
+                order: 10,
+                name: "Power Feedback",
+                detail: "Feedback disabled",
+                status: .skipped
+            ))
+        } else {
+            stages.append(PipelineStageInfo(
+                order: 10,
+                name: "Power Feedback",
+                detail: state.powerFeedbackActive
+                    ? "Increasing commanded current"
+                    : "Holding current",
+                status: state.powerFeedbackActive ? .active : .done
+            ))
+        }
+
+        state.pipelineStages = stages
     }
 
     // MARK: Phase Lock
@@ -703,11 +908,13 @@ final class QuarkResonatorEngine: ObservableObject {
         sweepFrequencyHz = 0.0
         sweepBestFrequencyHz = 0.0
         sweepBestResponse = 0.0
+        sweepBestTargetDistanceHz = .infinity
         sweepHasStarted = false
 
         calculateNaturalFrequency()
         calculateHydrogenTarget()
         calculateElectricalPower()
+        updatePipelineStages()
 
         state.statusMessage = "READY"
     }
@@ -972,6 +1179,11 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                liveActivityPanel          // ← moved to top of screen
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
                 frequencyKey
 
                 QuarkResonatorSceneView(controller: sceneController)
@@ -979,7 +1191,7 @@ struct ContentView: View {
 
                 ScrollView {
                     VStack(spacing: 12) {
-                        liveActivityPanel          // ← NEW
+                        pipelineStagesPanel        // ← NEW
                         frequencyPanel
                         electricalPanel
                         resonancePanel
@@ -1087,6 +1299,85 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(activity.color.opacity(0.5), lineWidth: 1)
         )
+    }
+
+    // MARK: - Pipeline Stages Panel (NEW)
+
+    private var pipelineStagesPanel: some View {
+        panel(title: "SIMULATION PIPELINE") {
+            VStack(alignment: .leading, spacing: 0) {
+                let stages = engine.state.pipelineStages
+
+                ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
+                    pipelineStageRow(stage: stage, isLast: index == stages.count - 1)
+                }
+
+                if stages.isEmpty {
+                    Text("No pipeline data yet — press START.")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+
+    private func pipelineStageRow(stage: PipelineStageInfo, isLast: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 0) {
+                ZStack {
+                    Circle()
+                        .fill(pipelineStageColor(stage.status))
+                        .frame(width: 22, height: 22)
+                    Text("\(stage.order)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.black)
+                }
+                .overlay(
+                    Circle()
+                        .stroke(pipelineStageColor(stage.status).opacity(0.5), lineWidth: 3)
+                        .scaleEffect(1.5)
+                        .opacity(stage.status == .active ? 1 : 0)
+                        .animation(
+                            stage.status == .active
+                                ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                : .default,
+                            value: stage.status
+                        )
+                )
+
+                if !isLast {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.15))
+                        .frame(width: 2)
+                        .frame(minHeight: 26)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(stage.name)
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text(stage.status.rawValue)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(pipelineStageColor(stage.status))
+                }
+                Text(stage.detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.gray)
+            }
+            .padding(.bottom, isLast ? 2 : 14)
+        }
+    }
+
+    private func pipelineStageColor(_ status: PipelineStageStatus) -> Color {
+        switch status {
+        case .pending: return .gray
+        case .active: return .cyan
+        case .done: return .green
+        case .skipped: return .white.opacity(0.3)
+        }
     }
 
     // MARK: - Frequency Key (slightly improved)
