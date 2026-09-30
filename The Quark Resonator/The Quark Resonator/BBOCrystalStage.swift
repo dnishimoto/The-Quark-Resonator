@@ -500,3 +500,4 @@ final class BBOCrystalStageNode: SCNNode {
         }
     }
 }
+

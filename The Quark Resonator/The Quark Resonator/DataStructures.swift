@@ -6,81 +6,8 @@
 //
 
 import Foundation
-struct BBOConfiguration {
+// BBO types (BBOCrystalConfiguration, BBOConversionResult) live in BBOCrystalStage.swift
 
-    // --------------------------------------------------------
-    // BBO crystal
-    // --------------------------------------------------------
-
-    var crystalLengthM: Double = 0.010
-
-    // --------------------------------------------------------
-    // SHG pump
-    // --------------------------------------------------------
-
-    // 5.0e14 Hz = 600 nm
-    // SHG produces approximately 1.0e15 Hz = 300 nm
-    var pumpFrequencyHz: Double = 5.0e14
-
-    // Wavelength is derived from frequency.
-    var pumpWavelengthNm: Double {
-        QRConstants.speedOfLight
-            / pumpFrequencyHz
-            * 1.0e9
-    }
-
-    // --------------------------------------------------------
-    // Optical properties
-    // --------------------------------------------------------
-
-    var effectiveNonlinearityPmPerV: Double = 2.0
-
-    var refractiveIndexPump: Double = 1.67
-
-    var refractiveIndexOutput: Double = 1.70
-
-    // --------------------------------------------------------
-    // Phase matching
-    // --------------------------------------------------------
-
-    var phaseMatchAngleRad: Double = 0.0
-
-    var phaseMatchingToleranceRadPerM: Double = 1.0
-
-    // --------------------------------------------------------
-    // Conversion
-    // --------------------------------------------------------
-
-    var conversionEfficiency: Double = 0.0
-
-    // Approximate optical transmission window
-    var minimumTransmissionWavelengthNm: Double = 190.0
-
-    var maximumTransmissionWavelengthNm: Double = 3500.0
-
-    // --------------------------------------------------------
-    // Control
-    // --------------------------------------------------------
-
-    var enabled: Bool = true
-}
-
-struct BBOResult {
-
-    var pumpTransmitted: Bool = false
-    var outputTransmitted: Bool = false
-
-    var pumpWavelengthNm: Double = 0.0
-
-    var outputFrequencyHz: Double = 0.0
-    var outputWavelengthNm: Double = 0.0
-
-    var phaseMatchAngleRad: Double? = nil
-    var phaseMismatchRadPerM: Double = 0.0
-
-    var effectiveNonlinearityPmPerV: Double = 0.0
-    var conversionEfficiency: Double = 0.0
-}
 // ============================================================
 // MARK: - CONSTANTS
 // ============================================================
@@ -189,7 +116,7 @@ struct ResonatorConfiguration {
     // BBO optical crystal
     // --------------------------------------------------------
 
-    var bbo = BBOConfiguration()
+    var bbo = BBOCrystalConfiguration()
 }
 // ============================================================
 // MARK: - RESONATOR MODE
@@ -223,7 +150,7 @@ struct ResonatorMode: Identifiable {
 // ============================================================
 
 enum PipelineStageStatus {
-
+    
     case pending
     case active
     case done
@@ -402,7 +329,7 @@ struct QuarkResonatorState {
     // BBO optical crystal
     // --------------------------------------------------------
 
-    var bboResult: BBOResult = BBOResult()
+    var bboResult = BBOConversionResult()
 
     // --------------------------------------------------------
     // Control

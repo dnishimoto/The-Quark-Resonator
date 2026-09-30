@@ -38,6 +38,8 @@ final class QuarkResonatorSceneController: ObservableObject {
     private let fieldNode = SCNNode()
     private let carrierNode = SCNNode()
 
+    private let bboStage = BBOCrystalStageNode()
+
     private let cameraNode = SCNNode()
     private let cameraTargetNode = SCNNode()
 
@@ -90,6 +92,7 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         buildEnergyPath()
         buildFrequencyReadout()
+        buildBBOStage()
 
         configureCamera()
         configureLighting()
@@ -987,6 +990,24 @@ final class QuarkResonatorSceneController: ObservableObject {
     }
 
     // ========================================================
+    // MARK: BBO Crystal Stage
+    // ========================================================
+
+    private func buildBBOStage() {
+
+        bboStage.position =
+            SCNVector3(
+                7.6,
+                0,
+                0
+            )
+
+        equipmentRoot.addChildNode(
+            bboStage
+        )
+    }
+
+    // ========================================================
     // MARK: Camera
     // ========================================================
 
@@ -1006,14 +1027,14 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         cameraNode.position =
             SCNVector3(
-                0,
-                3.0,
-                15.5
+                2.25,
+                4.0,
+                25.0
             )
 
         cameraTargetNode.position =
             SCNVector3(
-                0,
+                2.25,
                 0,
                 0
             )
@@ -1180,6 +1201,11 @@ final class QuarkResonatorSceneController: ObservableObject {
         updateCarrierPath(state: state)
 
         updateFrequencyReadout(state: state)
+
+        bboStage.update(
+            result: state.bboResult,
+            running: state.running
+        )
     }
 
     // ========================================================

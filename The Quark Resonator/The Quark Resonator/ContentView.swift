@@ -115,7 +115,6 @@ struct ContentView: View {
                     state: engine.state
                 )
                 .frame(minHeight: 320)
-                
                 ScrollView {
                     VStack(spacing: 12) {
                         pipelineStagesPanel        // ← NEW
@@ -286,10 +285,7 @@ struct ContentView: View {
                     Text(stage.name)
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
-                    Spacer()
-                    Text(pipelineStageStatusText(stage.status))
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(pipelineStageColor(stage.status))
+                
                 }
                 Text(stage.detail)
                     .font(.system(size: 11, design: .monospaced))
@@ -298,22 +294,13 @@ struct ContentView: View {
             .padding(.bottom, isLast ? 2 : 14)
         }
     }
-    private func pipelineStageStatusText(_ status: PipelineStageStatus) -> String {
+
+    private func pipelineStageColor(
+        _ status: PipelineStageStatus
+    ) -> Color {
+
         switch status {
-        case .pending:
-            return "PENDING"
-        case .active:
-            return "ACTIVE"
-        case .done:
-            return "DONE"
-        case .skipped:
-            return "SKIPPED"
-        case .complete:
-            return "COMPLETE"
-        }
-    }
-    private func pipelineStageColor(_ status: PipelineStageStatus) -> Color {
-        switch status {
+
         case .pending:
             return .gray
 

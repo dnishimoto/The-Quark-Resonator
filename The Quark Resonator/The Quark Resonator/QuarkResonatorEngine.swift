@@ -88,6 +88,12 @@ final class QuarkResonatorEngine: ObservableObject {
         calculateElectricalPower()
 
         updateTargetFrequencyLock()
+
+        // BBO nonlinear crystal conversion
+        state.bboResult =
+            BBOCrystalModel.convert(
+                configuration.bbo
+            )
     }
 
     // ========================================================
@@ -1530,3 +1536,4 @@ final class QuarkResonatorEngine: ObservableObject {
         }
     }
 }
+
