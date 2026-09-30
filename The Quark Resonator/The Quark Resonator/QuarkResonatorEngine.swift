@@ -665,12 +665,8 @@ final class QuarkResonatorEngine: ObservableObject {
 
         state.storedEnergyJ =
             total.isFinite
-            ? max(total, 0)
-            : 0
-
-        state.qrtlEnergyJ =
-            state.targetModeEnergyJ *
-            configuration.qrtlCoupling
+            ? max(total, 0.0)
+            : 0.0
     }
 
     // ========================================================
@@ -1109,14 +1105,6 @@ final class QuarkResonatorEngine: ObservableObject {
 
     private func calculateQRTLCoupling() {
 
-        guard state.coherentCarrierActive
-        else {
-            state.qrtlCoupledEnergyJ = 0
-            state.qrtlEnergyJ = 0
-            state.electromagneticShellEnergyJ = 0
-            return
-        }
-
         // ----------------------------------------------------
         // Resonator mode energy
         // ----------------------------------------------------
@@ -1124,7 +1112,7 @@ final class QuarkResonatorEngine: ObservableObject {
         let modeEnergy =
             max(
                 state.generatedModeEnergyJ,
-                0
+                0.0
             )
 
         // ----------------------------------------------------
@@ -1134,7 +1122,7 @@ final class QuarkResonatorEngine: ObservableObject {
         let magneticFieldTesla =
             max(
                 QRConstants.electromagneticFieldTesla,
-                0
+                0.0
             )
 
         let electromagneticPressurePa =
@@ -1146,41 +1134,72 @@ final class QuarkResonatorEngine: ObservableObject {
             magneticFieldTesla
 
         state.electromagneticPressurePa =
-            electromagneticPressurePa
+            electromagneticPressurePa.isFinite
+            ? max(electromagneticPressurePa, 0.0)
+            : 0.0
 
         // ----------------------------------------------------
-        // Electromagnetic pressure → shell energy
-        //
-        // E = P × V
+        // QRTL shell geometry
         // ----------------------------------------------------
 
         let radius =
             max(
                 configuration.qrtlShellRadiusM,
-                0
+                0.0
             )
 
-        let shellVolume =
-            (4.0 / 3.0) *
+        let surfaceArea =
+            4.0 *
             Double.pi *
-            radius *
             radius *
             radius
 
+        // ----------------------------------------------------
+        // EM pressure -> compression force
+        // F = P × A
+        // ----------------------------------------------------
+
+        let electromagneticForceN =
+            state.electromagneticPressurePa *
+            surfaceArea
+
+        // ----------------------------------------------------
+        // Shell compression
+        // Δx = radius × compression fraction
+        // ----------------------------------------------------
+
+        let compressionFraction =
+            min(
+                1.0,
+                max(
+                    0.0,
+                    configuration.qrtlShellCompressionFraction
+                )
+            )
+
+        let compressionDistanceM =
+            radius *
+            compressionFraction
+
+        // ----------------------------------------------------
+        // Compression work
+        // W = F × Δx
+        // ----------------------------------------------------
+
         let electromagneticShellEnergy =
-            electromagneticPressurePa *
-            shellVolume
+            electromagneticForceN *
+            compressionDistanceM
 
         state.electromagneticShellEnergyJ =
             electromagneticShellEnergy.isFinite
             ? max(
                 electromagneticShellEnergy,
-                0
+                0.0
             )
-            : 0
+            : 0.0
 
         // ----------------------------------------------------
-        // Total energy entering the QRTL shell
+        // Total QRTL shell energy
         // ----------------------------------------------------
 
         let totalShellEnergy =
@@ -1193,26 +1212,28 @@ final class QuarkResonatorEngine: ObservableObject {
 
         let coupling =
             min(
-                1,
+                1.0,
                 max(
-                    0,
+                    0.0,
                     configuration.qrtlCoupling
                 )
             )
 
         let coupledEnergy =
             totalShellEnergy *
-            state.coherence *
             coupling
+
+        state.qrtlCoupledEnergyJ =
+            coupledEnergy.isFinite
+            ? max(
+                coupledEnergy,
+                0.0
+            )
+            : 0.0
 
         // ----------------------------------------------------
         // Final QRTL shell energy
         // ----------------------------------------------------
-
-        state.qrtlCoupledEnergyJ =
-            coupledEnergy.isFinite
-            ? max(coupledEnergy, 0)
-            : 0
 
         state.qrtlEnergyJ =
             state.qrtlCoupledEnergyJ

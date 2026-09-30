@@ -28,7 +28,9 @@ struct ContentView: View {
     @State private var timer: Timer?
 
     private var estimatedShellEnergyEV: Double {
-        abs(engine.state.hydrogenEnergyChangeJ) / QRConstants.electronVolt
+
+        engine.state.qrtlEnergyJ /
+        QRConstants.electronVolt
     }
 
     // MARK: - Live Activity Helper

@@ -42,6 +42,7 @@ enum QRConstants {
 // ============================================================
 
 struct ResonatorConfiguration {
+    var qrtlShellCompressionFraction: Double = 0.10
     var qrtlShellRadiusM: Double = 1.0e-12
     // --------------------------------------------------------
     // Mechanical resonator
