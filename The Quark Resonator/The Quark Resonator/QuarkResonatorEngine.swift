@@ -25,9 +25,7 @@ final class QuarkResonatorEngine: ObservableObject {
     var simulationTime: Double = 0.0
 
     private var sweepFrequencyHz: Double = 0.0
-
     private var sweepBestFrequencyHz: Double = 0.0
-
     private var sweepBestResponse: Double = 0.0
 
     private var sweepBestTargetDistanceHz: Double =
@@ -89,11 +87,15 @@ final class QuarkResonatorEngine: ObservableObject {
 
         updateTargetFrequencyLock()
 
-        // BBO nonlinear crystal conversion
-        state.bboResult =
-            BBOCrystalModel.convert(
-                configuration.bbo
-            )
+        // ----------------------------------------------------
+        // BBO
+        //
+        // Initial BBO calculation.
+        // During the running pipeline the pump frequency is
+        // derived from the resonator frequency.
+        // ----------------------------------------------------
+
+        calculateBBO()
     }
 
     // ========================================================
@@ -319,7 +321,8 @@ final class QuarkResonatorEngine: ObservableObject {
         let denominator =
             sqrt(
                 pow(
-                    1.0 - ratio * ratio,
+                    1.0 -
+                    ratio * ratio,
                     2
                 )
                 +
@@ -387,7 +390,9 @@ final class QuarkResonatorEngine: ObservableObject {
     private func advanceFrequencySweep() {
 
         guard sweepHasStarted else {
+
             startFrequencySweep()
+
             return
         }
 
@@ -456,6 +461,13 @@ final class QuarkResonatorEngine: ObservableObject {
 
         identifyResonatorModes()
 
+        // ----------------------------------------------------
+        // BBO is recalculated after the resonant frequency
+        // has been identified.
+        // ----------------------------------------------------
+
+        calculateBBO()
+
         if state.targetModeDetected {
 
             state.statusMessage =
@@ -515,7 +527,8 @@ final class QuarkResonatorEngine: ObservableObject {
 
             let response =
                 calculateResonanceResponse(
-                    frequency: frequency
+                    frequency:
+                        frequency
                 )
 
             let distance =
@@ -989,6 +1002,53 @@ final class QuarkResonatorEngine: ObservableObject {
     }
 
     // ========================================================
+    // MARK: BBO
+    // ========================================================
+
+    private func calculateBBO() {
+
+        // ----------------------------------------------------
+        // The resonator produces the target frequency.
+        //
+        // BBO performs SHG:
+        //
+        // pump frequency × 2 = output frequency
+        //
+        // Therefore the BBO pump is half of the resonator
+        // output frequency.
+        // ----------------------------------------------------
+
+        let resonatorFrequency =
+            max(
+                state.outputFrequencyHz,
+                0.0
+            )
+
+        guard resonatorFrequency > 0.0 else {
+
+            state.bboResult =
+                BBOCrystalModel.emptyResult()
+
+            return
+        }
+
+        let pumpFrequencyHz =
+            resonatorFrequency / 2.0
+
+        configuration.bbo.pumpFrequencyHz =
+            pumpFrequencyHz
+
+        // ----------------------------------------------------
+        // Calculate BBO optical conversion
+        // ----------------------------------------------------
+
+        state.bboResult =
+            BBOCrystalModel.convert(
+                configuration.bbo
+            )
+    }
+
+    // ========================================================
     // MARK: Coherence
     // ========================================================
 
@@ -1051,19 +1111,85 @@ final class QuarkResonatorEngine: ObservableObject {
 
         guard state.coherentCarrierActive
         else {
-
             state.qrtlCoupledEnergyJ = 0
-
             state.qrtlEnergyJ = 0
-
+            state.electromagneticShellEnergyJ = 0
             return
         }
+
+        // ----------------------------------------------------
+        // Resonator mode energy
+        // ----------------------------------------------------
 
         let modeEnergy =
             max(
                 state.generatedModeEnergyJ,
                 0
             )
+
+        // ----------------------------------------------------
+        // Electromagnetic field
+        // ----------------------------------------------------
+
+        let magneticFieldTesla =
+            max(
+                QRConstants.electromagneticFieldTesla,
+                0
+            )
+
+        let electromagneticPressurePa =
+            magneticFieldTesla *
+            magneticFieldTesla /
+            (2.0 * QRConstants.vacuumPermeability)
+
+        state.electromagneticFieldTesla =
+            magneticFieldTesla
+
+        state.electromagneticPressurePa =
+            electromagneticPressurePa
+
+        // ----------------------------------------------------
+        // Electromagnetic pressure → shell energy
+        //
+        // E = P × V
+        // ----------------------------------------------------
+
+        let radius =
+            max(
+                configuration.qrtlShellRadiusM,
+                0
+            )
+
+        let shellVolume =
+            (4.0 / 3.0) *
+            Double.pi *
+            radius *
+            radius *
+            radius
+
+        let electromagneticShellEnergy =
+            electromagneticPressurePa *
+            shellVolume
+
+        state.electromagneticShellEnergyJ =
+            electromagneticShellEnergy.isFinite
+            ? max(
+                electromagneticShellEnergy,
+                0
+            )
+            : 0
+
+        // ----------------------------------------------------
+        // Total energy entering the QRTL shell
+        // ----------------------------------------------------
+
+        let totalShellEnergy =
+            modeEnergy +
+            state.electromagneticShellEnergyJ
+
+        // ----------------------------------------------------
+        // QRTL coupling
+        // ----------------------------------------------------
 
         let coupling =
             min(
@@ -1075,13 +1201,17 @@ final class QuarkResonatorEngine: ObservableObject {
             )
 
         let coupledEnergy =
-            modeEnergy *
+            totalShellEnergy *
             state.coherence *
             coupling
 
+        // ----------------------------------------------------
+        // Final QRTL shell energy
+        // ----------------------------------------------------
+
         state.qrtlCoupledEnergyJ =
             coupledEnergy.isFinite
-            ? coupledEnergy
+            ? max(coupledEnergy, 0)
             : 0
 
         state.qrtlEnergyJ =
@@ -1230,13 +1360,13 @@ final class QuarkResonatorEngine: ObservableObject {
             (
                 2,
                 "Frequency Search",
-                "Sweeping the resonator toward 10¹⁵ Hz."
+                "Sweeping the resonator toward the target frequency."
             ),
 
             (
                 3,
                 "Resonant Frequency Lock",
-                "Comparing output frequency with the 10¹⁵ Hz target."
+                "Comparing output frequency with the target frequency."
             ),
 
             (
@@ -1247,18 +1377,24 @@ final class QuarkResonatorEngine: ObservableObject {
 
             (
                 5,
-                "QRTL Coupling",
-                "Coherent resonator energy transferred into QRTL."
+                "BBO SHG",
+                "Second-harmonic optical conversion through the BBO crystal."
             ),
 
             (
                 6,
+                "QRTL Coupling",
+                "Coherent optical/resonator energy transferred into QRTL."
+            ),
+
+            (
+                7,
                 "Helium-4 Shell",
                 "QRTL-coupled energy raises the modeled helium-4 shell."
             ),
 
             (
-                7,
+                8,
                 "Fusion-State Transition",
                 "Final modeled QRTL transition condition."
             )
@@ -1273,12 +1409,14 @@ final class QuarkResonatorEngine: ObservableObject {
                 switch $0.0 {
 
                 case 1:
+
                     status =
                         state.inputPowerW > 0
                         ? .done
                         : .active
 
                 case 2:
+
                     status =
                         state.frequencySearchActive
                         ? .active
@@ -1288,6 +1426,7 @@ final class QuarkResonatorEngine: ObservableObject {
                         : .pending
 
                 case 3:
+
                     status =
                         state.targetFrequencyLocked
                         ? .done
@@ -1297,6 +1436,7 @@ final class QuarkResonatorEngine: ObservableObject {
                         : .pending
 
                 case 4:
+
                     status =
                         state.coherentCarrierActive
                         ? .done
@@ -1306,8 +1446,9 @@ final class QuarkResonatorEngine: ObservableObject {
                         : .pending
 
                 case 5:
+
                     status =
-                        state.qrtlCoupledEnergyJ > 0
+                        state.bboResult.successful
                         ? .done
                         :
                         state.coherentCarrierActive
@@ -1315,6 +1456,17 @@ final class QuarkResonatorEngine: ObservableObject {
                         : .pending
 
                 case 6:
+
+                    status =
+                        state.qrtlCoupledEnergyJ > 0
+                        ? .done
+                        :
+                        state.bboResult.successful
+                        ? .active
+                        : .pending
+
+                case 7:
+
                     status =
                         state.helium4ShellExcited
                         ? .done
@@ -1324,6 +1476,7 @@ final class QuarkResonatorEngine: ObservableObject {
                         : .pending
 
                 default:
+
                     status =
                         state.fusionTransitionReady
                         ? .complete
@@ -1366,22 +1519,34 @@ final class QuarkResonatorEngine: ObservableObject {
         simulationTime +=
             safeDeltaTime
 
+        // ----------------------------------------------------
         // 1. Electrical input
+        // ----------------------------------------------------
+
         calculateElectricalPower()
 
+        // ----------------------------------------------------
         // 2. Integrate electrical energy once
+        // ----------------------------------------------------
+
         integrateInputEnergy(
             deltaTime:
                 safeDeltaTime
         )
 
+        // ----------------------------------------------------
         // 3. Frequency search
+        // ----------------------------------------------------
+
         if state.frequencySearchActive {
 
             advanceFrequencySweep()
         }
 
+        // ----------------------------------------------------
         // 4. Resonator carrier
+        // ----------------------------------------------------
+
         if state.frequencySearchCompleted {
 
             updateResonatorDrive(
@@ -1390,45 +1555,109 @@ final class QuarkResonatorEngine: ObservableObject {
             )
         }
 
+        // ----------------------------------------------------
         // 5. Stored resonator energy
+        // ----------------------------------------------------
+
         calculateStoredEnergy()
 
+        // ----------------------------------------------------
         // 6. Loss and Q
+        // ----------------------------------------------------
+
         calculateLoss()
 
+        // ----------------------------------------------------
         // 7. Identify resonant modes
+        // ----------------------------------------------------
+
         identifyResonatorModes()
 
+        // ----------------------------------------------------
         // 8. Determine target frequency lock
+        // ----------------------------------------------------
+
         updateTargetFrequencyLock()
 
+        // ----------------------------------------------------
         // 9. Phase / coherence
+        // ----------------------------------------------------
+
         phaseLock()
 
         calculateCoherence()
 
-        // 10. QRTL coupling
+        // ----------------------------------------------------
+        // 10. BBO optical conversion
+        // ----------------------------------------------------
+        //
+        // BBO now sits between the coherent resonator
+        // carrier and QRTL coupling.
+        //
+        // Resonator frequency
+        //       ↓
+        // BBO pump = frequency / 2
+        //       ↓
+        // SHG output = pump × 2
+        //
+        // ----------------------------------------------------
+
+        if state.coherentCarrierActive {
+
+            calculateBBO()
+
+        } else {
+
+            //state.bboResult =
+               // BBOResult()
+        }
+
+        // ----------------------------------------------------
+        // 11. QRTL coupling
+        // ----------------------------------------------------
+
         calculateQRTLCoupling()
 
-        // 11. Helium-4 shell
+        // ----------------------------------------------------
+        // 12. Helium-4 shell
+        // ----------------------------------------------------
+
         calculateHelium4ShellExcitation()
 
+        // ----------------------------------------------------
         // Existing hydrogen response retained
+        // ----------------------------------------------------
+
         calculateHydrogenResponse()
 
-        // 12. Required power
+        // ----------------------------------------------------
+        // 13. Required power
+        // ----------------------------------------------------
+
         calculateRequiredPower()
 
-        // 13. Power feedback
+        // ----------------------------------------------------
+        // 14. Power feedback
+        // ----------------------------------------------------
+
         increasePowerIfInsufficient(
             deltaTime:
                 safeDeltaTime
         )
 
-        // 14. Final electrical state
-        calculateElectricalPower()
+        // ----------------------------------------------------
+        // 15. Final electrical state
+        // ----------------------------------------------------
 
-        // 15. Pipeline
+        calculateElectricalPower()
+        
+        calculateElectromagneticPressure()
+        calculateElectromagneticShellCompression()
+
+        // ----------------------------------------------------
+        // 16. Final pipeline state
+        // ----------------------------------------------------
+
         updatePipelineStages()
     }
 
@@ -1472,7 +1701,43 @@ final class QuarkResonatorEngine: ObservableObject {
         state.statusMessage =
             "STOPPED"
     }
+    private func calculateElectromagneticShellCompression() {
 
+        let B =
+            max(
+                QRConstants.electromagneticFieldTesla,
+                0.0
+            )
+
+        let pressure =
+            B * B /
+            (2.0 * QRConstants.vacuumPermeability)
+
+        let radius =
+            max(
+                configuration.qrtlShellRadiusM,
+                0.0
+            )
+
+        let volume =
+            (4.0 / 3.0) *
+            Double.pi *
+            radius *
+            radius *
+            radius
+
+        let electromagneticEnergy =
+            pressure * volume
+
+        state.electromagneticFieldTesla =
+            B
+
+        state.electromagneticPressurePa =
+            pressure
+
+        state.electromagneticShellEnergyJ =
+            electromagneticEnergy
+    }
     // ========================================================
     // MARK: RESET
     // ========================================================
@@ -1535,5 +1800,25 @@ final class QuarkResonatorEngine: ObservableObject {
                 "QRTL DISABLED"
         }
     }
-}
+    private func calculateElectromagneticPressure() {
 
+        let magneticFieldTesla =
+            max(
+                QRConstants.electromagneticFieldTesla,
+                0.0
+            )
+
+        let pressure =
+            magneticFieldTesla *
+            magneticFieldTesla /
+            (2.0 * QRConstants.vacuumPermeability)
+
+        state.electromagneticFieldTesla =
+            magneticFieldTesla
+
+        state.electromagneticPressurePa =
+            pressure.isFinite
+            ? max(pressure, 0.0)
+            : 0.0
+    }
+}

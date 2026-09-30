@@ -17,10 +17,24 @@ enum QRConstants {
     static let targetFrequencyHz = 1.0e15
 
     static let speedOfLight = 299_792_458.0
-
     static let planck = 6.626_070_15e-34
-
     static let electronVolt = 1.602_176_634e-19
+
+    // Electromagnetic field
+    static let electromagneticFieldTesla = 5.0
+
+    // Vacuum permeability
+    static let vacuumPermeability =
+        4.0 * Double.pi * 1.0e-7
+
+    // Magnetic pressure:
+    //
+    // P = B² / (2 μ₀)
+    //
+    static let electromagneticPressurePa =
+        electromagneticFieldTesla *
+        electromagneticFieldTesla /
+        (2.0 * vacuumPermeability)
 }
 
 // ============================================================
@@ -28,7 +42,7 @@ enum QRConstants {
 // ============================================================
 
 struct ResonatorConfiguration {
-
+    var qrtlShellRadiusM: Double = 1.0e-12
     // --------------------------------------------------------
     // Mechanical resonator
     // --------------------------------------------------------
@@ -172,6 +186,10 @@ struct PipelineStageInfo: Identifiable {
 }
 
 struct QuarkResonatorState {
+    
+    var electromagneticFieldTesla: Double = 0.0
+    var electromagneticPressurePa: Double = 0.0
+    var electromagneticShellEnergyJ: Double = 0.0
 
     // --------------------------------------------------------
     // Electrical

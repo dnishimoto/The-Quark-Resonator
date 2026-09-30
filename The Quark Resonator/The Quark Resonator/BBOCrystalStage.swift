@@ -79,6 +79,8 @@ struct BBOConversionResult {
     var outputTransmitted: Bool = false
 
     var isPhaseMatchable: Bool { phaseMatchAngleRad != nil }
+    
+    var successful : Bool = false
 }
 
 // MARK: - Model
@@ -86,40 +88,104 @@ struct BBOConversionResult {
 enum BBOCrystalModel {
 
     private static let speedOfLight = 299_792_458.0
+
     private static let vacuumPermittivity = 8.854_187_812_8e-12
+
+    // ----------------------------------------------------
+    // Empty result
+    // ----------------------------------------------------
+
+    static func emptyResult() -> BBOConversionResult {
+
+        return BBOConversionResult(
+            pumpWavelengthNm: 0.0,
+            outputFrequencyHz: 0.0,
+            outputWavelengthNm: 0.0,
+            phaseMatchAngleRad: nil,
+            operatingAngleRad: 0.0,
+            phaseMismatchRadPerM: 0.0,
+            effectiveNonlinearityPmPerV: 0.0,
+            conversionEfficiency: 0.0,
+            pumpTransmitted: false,
+            outputTransmitted: false,
+            successful: false
+        )
+    }
 
     // Eimerl Sellmeier equations, wavelength in micrometres.
 
     static func ordinaryIndex(wavelengthUm l: Double) -> Double {
+
         let l2 = l * l
-        let n2 = 2.7359 + 0.01878 / (l2 - 0.01822) - 0.01354 * l2
+
+        let n2 =
+            2.7359
+            + 0.01878 / (l2 - 0.01822)
+            - 0.01354 * l2
+
         return n2 > 0 ? n2.squareRoot() : 1.0
     }
 
-    static func extraordinaryIndexPrincipal(wavelengthUm l: Double) -> Double {
+    static func extraordinaryIndexPrincipal(
+        wavelengthUm l: Double
+    ) -> Double {
+
         let l2 = l * l
-        let n2 = 2.3753 + 0.01224 / (l2 - 0.01667) - 0.01516 * l2
+
+        let n2 =
+            2.3753
+            + 0.01224 / (l2 - 0.01667)
+            - 0.01516 * l2
+
         return n2 > 0 ? n2.squareRoot() : 1.0
     }
 
     /// Extraordinary index at angle theta from the optic axis.
-    static func extraordinaryIndex(wavelengthUm l: Double, angleRad theta: Double) -> Double {
-        let no = ordinaryIndex(wavelengthUm: l)
-        let ne = extraordinaryIndexPrincipal(wavelengthUm: l)
+    static func extraordinaryIndex(
+        wavelengthUm l: Double,
+        angleRad theta: Double
+    ) -> Double {
+
+        let no =
+            ordinaryIndex(
+                wavelengthUm: l
+            )
+
+        let ne =
+            extraordinaryIndexPrincipal(
+                wavelengthUm: l
+            )
+
         let s = sin(theta)
         let c = cos(theta)
-        let inverseSquare = (s * s) / (ne * ne) + (c * c) / (no * no)
-        return inverseSquare > 0 ? 1.0 / inverseSquare.squareRoot() : no
+
+        let inverseSquare =
+            (s * s) / (ne * ne)
+            + (c * c) / (no * no)
+
+        return inverseSquare > 0
+            ? 1.0 / inverseSquare.squareRoot()
+            : no
     }
 
     /// Type-I phase-matching angle for second-harmonic generation, or nil.
-    static func phaseMatchAngle(pumpWavelengthUm l1: Double) -> Double? {
+    static func phaseMatchAngle(
+        pumpWavelengthUm l1: Double
+    ) -> Double? {
 
         let l2 = l1 / 2.0
-        let targetIndex = ordinaryIndex(wavelengthUm: l1)
+
+        let targetIndex =
+            ordinaryIndex(
+                wavelengthUm: l1
+            )
 
         func mismatch(_ theta: Double) -> Double {
-            extraordinaryIndex(wavelengthUm: l2, angleRad: theta) - targetIndex
+
+            extraordinaryIndex(
+                wavelengthUm: l2,
+                angleRad: theta
+            ) - targetIndex
         }
 
         var low = 0.0
@@ -128,15 +194,25 @@ enum BBOCrystalModel {
         let fLow = mismatch(low)
         let fHigh = mismatch(high)
 
-        guard fLow.isFinite, fHigh.isFinite, fLow * fHigh <= 0 else {
+        guard
+            fLow.isFinite,
+            fHigh.isFinite,
+            fLow * fHigh <= 0
+        else {
             return nil
         }
 
         for _ in 0..<80 {
-            let mid = 0.5 * (low + high)
+
+            let mid =
+                0.5 * (low + high)
+
             if mismatch(low) * mismatch(mid) <= 0 {
+
                 high = mid
+
             } else {
+
                 low = mid
             }
         }
@@ -144,25 +220,68 @@ enum BBOCrystalModel {
         return 0.5 * (low + high)
     }
 
-    private static func sinc(_ x: Double) -> Double {
-        abs(x) < 1.0e-9 ? 1.0 : sin(x) / x
+    private static func sinc(
+        _ x: Double
+    ) -> Double {
+
+        abs(x) < 1.0e-9
+            ? 1.0
+            : sin(x) / x
     }
 
-    static func convert(_ config: BBOCrystalConfiguration) -> BBOConversionResult {
+    static func convert(
+        _ config: BBOCrystalConfiguration
+    ) -> BBOConversionResult {
 
         var result = BBOConversionResult()
 
-        guard config.pumpFrequencyHz.isFinite, config.pumpFrequencyHz > 0 else {
+        // ----------------------------------------------------
+        // Validate pump frequency
+        // ----------------------------------------------------
+
+        guard
+            config.pumpFrequencyHz.isFinite,
+            config.pumpFrequencyHz > 0.0
+        else {
             return result
         }
 
-        let pumpWavelengthM = speedOfLight / config.pumpFrequencyHz
-        let pumpWavelengthUm = pumpWavelengthM * 1.0e6
-        let outputWavelengthUm = pumpWavelengthUm / 2.0
+        // ----------------------------------------------------
+        // Pump wavelength
+        //
+        // λ = c / f
+        // ----------------------------------------------------
 
-        result.pumpWavelengthNm = pumpWavelengthUm * 1.0e3
-        result.outputFrequencyHz = 2.0 * config.pumpFrequencyHz
-        result.outputWavelengthNm = outputWavelengthUm * 1.0e3
+        let pumpWavelengthM =
+            speedOfLight / config.pumpFrequencyHz
+
+        let pumpWavelengthUm =
+            pumpWavelengthM * 1.0e6
+
+        // ----------------------------------------------------
+        // Second-harmonic wavelength
+        //
+        // SHG:
+        //
+        // f₂ = 2 f₁
+        // λ₂ = λ₁ / 2
+        // ----------------------------------------------------
+
+        let outputWavelengthUm =
+            pumpWavelengthUm / 2.0
+
+        result.pumpWavelengthNm =
+            pumpWavelengthUm * 1.0e3
+
+        result.outputFrequencyHz =
+            2.0 * config.pumpFrequencyHz
+
+        result.outputWavelengthNm =
+            outputWavelengthUm * 1.0e3
+
+        // ----------------------------------------------------
+        // BBO transmission window
+        // ----------------------------------------------------
 
         result.pumpTransmitted =
             result.pumpWavelengthNm >= config.transmissionMinNm &&
@@ -172,49 +291,193 @@ enum BBOCrystalModel {
             result.outputWavelengthNm >= config.transmissionMinNm &&
             result.outputWavelengthNm <= config.transmissionMaxNm
 
-        guard let matchAngle = phaseMatchAngle(pumpWavelengthUm: pumpWavelengthUm) else {
+        // ----------------------------------------------------
+        // Find Type-I phase-matching angle
+        // ----------------------------------------------------
+
+        guard let matchAngle =
+            phaseMatchAngle(
+                pumpWavelengthUm: pumpWavelengthUm
+            )
+        else {
             return result
         }
 
-        let operatingAngle = matchAngle + config.angleDetuneRad
+        // ----------------------------------------------------
+        // Apply crystal angle detuning
+        // ----------------------------------------------------
 
-        result.phaseMatchAngleRad = matchAngle
-        result.operatingAngleRad = operatingAngle
+        let operatingAngle =
+            matchAngle + config.angleDetuneRad
 
-        let n1 = ordinaryIndex(wavelengthUm: pumpWavelengthUm)
-        let n2 = extraordinaryIndex(wavelengthUm: outputWavelengthUm, angleRad: operatingAngle)
+        result.phaseMatchAngleRad =
+            matchAngle
 
-        let deffPm = config.d22PmPerV * cos(operatingAngle)
-        let deff = deffPm * 1.0e-12
+        result.operatingAngleRad =
+            operatingAngle
 
-        result.effectiveNonlinearityPmPerV = deffPm
+        // ----------------------------------------------------
+        // Refractive indices
+        // ----------------------------------------------------
 
-        let omega = 2.0 * Double.pi * config.pumpFrequencyHz
-        let c3 = speedOfLight * speedOfLight * speedOfLight
+        let n1 =
+            ordinaryIndex(
+                wavelengthUm: pumpWavelengthUm
+            )
+
+        let n2 =
+            extraordinaryIndex(
+                wavelengthUm: outputWavelengthUm,
+                angleRad: operatingAngle
+            )
+
+        // ----------------------------------------------------
+        // Effective nonlinear coefficient
+        // ----------------------------------------------------
+
+        let deffPm =
+            config.d22PmPerV *
+            cos(operatingAngle)
+
+        let deff =
+            deffPm * 1.0e-12
+
+        result.effectiveNonlinearityPmPerV =
+            deffPm
+
+        // ----------------------------------------------------
+        // Nonlinear coupling strength
+        // ----------------------------------------------------
+
+        let omega =
+            2.0 *
+            Double.pi *
+            config.pumpFrequencyHz
+
+        let c3 =
+            speedOfLight *
+            speedOfLight *
+            speedOfLight
+
+        let pumpIntensity =
+            max(
+                config.pumpIntensityWPerM2,
+                0.0
+            )
 
         let gammaSquared =
-            (2.0 * omega * omega * deff * deff * max(config.pumpIntensityWPerM2, 0.0)) /
-            (n1 * n1 * n2 * vacuumPermittivity * c3)
+            (
+                2.0 *
+                omega *
+                omega *
+                deff *
+                deff *
+                pumpIntensity
+            )
+            /
+            (
+                n1 *
+                n1 *
+                n2 *
+                vacuumPermittivity *
+                c3
+            )
 
-        let gamma = gammaSquared > 0 ? gammaSquared.squareRoot() : 0.0
+        let gamma =
+            gammaSquared > 0.0
+            ? gammaSquared.squareRoot()
+            : 0.0
 
-        let k1 = 2.0 * Double.pi * n1 / pumpWavelengthM
-        let k2 = 2.0 * Double.pi * n2 / (pumpWavelengthM / 2.0)
-        let deltaK = k2 - 2.0 * k1
+        // ----------------------------------------------------
+        // Phase mismatch
+        //
+        // Δk = k₂ - 2k₁
+        // ----------------------------------------------------
 
-        result.phaseMismatchRadPerM = deltaK
+        let k1 =
+            2.0 *
+            Double.pi *
+            n1 /
+            pumpWavelengthM
 
-        let length = max(config.crystalLengthM, 0.0)
-        let tanhTerm = tanh(gamma * length)
-        let sincTerm = sinc(deltaK * length / 2.0)
+        let k2 =
+            2.0 *
+            Double.pi *
+            n2 /
+            (pumpWavelengthM / 2.0)
 
-        var efficiency = tanhTerm * tanhTerm * sincTerm * sincTerm
+        let deltaK =
+            k2 - 2.0 * k1
 
-        if !(result.pumpTransmitted && result.outputTransmitted) {
+        result.phaseMismatchRadPerM =
+            deltaK
+
+        // ----------------------------------------------------
+        // Crystal conversion
+        // ----------------------------------------------------
+
+        let length =
+            max(
+                config.crystalLengthM,
+                0.0
+            )
+
+        let tanhTerm =
+            tanh(
+                gamma * length
+            )
+
+        let sincTerm =
+            sinc(
+                deltaK * length / 2.0
+            )
+
+        var efficiency =
+            tanhTerm *
+            tanhTerm *
+            sincTerm *
+            sincTerm
+
+        // ----------------------------------------------------
+        // Transmission requirement
+        // ----------------------------------------------------
+
+        if !(
+            result.pumpTransmitted &&
+            result.outputTransmitted
+        ) {
             efficiency = 0.0
         }
 
-        result.conversionEfficiency = efficiency.isFinite ? min(1.0, max(0.0, efficiency)) : 0.0
+        // ----------------------------------------------------
+        // Clamp conversion efficiency
+        // ----------------------------------------------------
+
+        result.conversionEfficiency =
+            efficiency.isFinite
+            ? min(
+                1.0,
+                max(
+                    0.0,
+                    efficiency
+                )
+            )
+            : 0.0
+
+        // ----------------------------------------------------
+        // Final BBO outcome
+        //
+        // The conversion is considered successful only when
+        // the pump and output are transmitted, phase matching
+        // exists, and a positive conversion efficiency was
+        // calculated.
+        // ----------------------------------------------------
+
+        result.successful =
+            result.pumpTransmitted &&
+            result.outputTransmitted &&
+            result.isPhaseMatchable &&
+            result.conversionEfficiency > 0.0
 
         return result
     }
