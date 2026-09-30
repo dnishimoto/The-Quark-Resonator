@@ -6,3 +6,415 @@
 //
 
 import Foundation
+struct BBOConfiguration {
+
+    // --------------------------------------------------------
+    // BBO crystal
+    // --------------------------------------------------------
+
+    var crystalLengthM: Double = 0.010
+
+    // --------------------------------------------------------
+    // SHG pump
+    // --------------------------------------------------------
+
+    // 5.0e14 Hz = 600 nm
+    // SHG produces approximately 1.0e15 Hz = 300 nm
+    var pumpFrequencyHz: Double = 5.0e14
+
+    // Wavelength is derived from frequency.
+    var pumpWavelengthNm: Double {
+        QRConstants.speedOfLight
+            / pumpFrequencyHz
+            * 1.0e9
+    }
+
+    // --------------------------------------------------------
+    // Optical properties
+    // --------------------------------------------------------
+
+    var effectiveNonlinearityPmPerV: Double = 2.0
+
+    var refractiveIndexPump: Double = 1.67
+
+    var refractiveIndexOutput: Double = 1.70
+
+    // --------------------------------------------------------
+    // Phase matching
+    // --------------------------------------------------------
+
+    var phaseMatchAngleRad: Double = 0.0
+
+    var phaseMatchingToleranceRadPerM: Double = 1.0
+
+    // --------------------------------------------------------
+    // Conversion
+    // --------------------------------------------------------
+
+    var conversionEfficiency: Double = 0.0
+
+    // Approximate optical transmission window
+    var minimumTransmissionWavelengthNm: Double = 190.0
+
+    var maximumTransmissionWavelengthNm: Double = 3500.0
+
+    // --------------------------------------------------------
+    // Control
+    // --------------------------------------------------------
+
+    var enabled: Bool = true
+}
+
+struct BBOResult {
+
+    var pumpTransmitted: Bool = false
+    var outputTransmitted: Bool = false
+
+    var pumpWavelengthNm: Double = 0.0
+
+    var outputFrequencyHz: Double = 0.0
+    var outputWavelengthNm: Double = 0.0
+
+    var phaseMatchAngleRad: Double? = nil
+    var phaseMismatchRadPerM: Double = 0.0
+
+    var effectiveNonlinearityPmPerV: Double = 0.0
+    var conversionEfficiency: Double = 0.0
+}
+// ============================================================
+// MARK: - CONSTANTS
+// ============================================================
+
+enum QRConstants {
+
+    static let targetFrequencyHz = 1.0e15
+
+    static let speedOfLight = 299_792_458.0
+
+    static let planck = 6.626_070_15e-34
+
+    static let electronVolt = 1.602_176_634e-19
+}
+
+// ============================================================
+// MARK: - RESONATOR CONFIGURATION
+// ============================================================
+
+struct ResonatorConfiguration {
+
+    // --------------------------------------------------------
+    // Mechanical resonator
+    // --------------------------------------------------------
+
+    var effectiveMassKg: Double = 1.0e-30
+
+    var restoringConstant: Double = 39.4784176
+
+    var damping: Double = 1.0e-18
+
+    // --------------------------------------------------------
+    // Electrical input
+    // --------------------------------------------------------
+
+    var inputVoltage: Double = 10.0
+
+    var maximumCurrent: Double = 10.0
+
+    var commandedCurrent: Double = 0.0
+
+    // --------------------------------------------------------
+    // Drive
+    // --------------------------------------------------------
+
+    var driveFrequencyHz: Double =
+        QRConstants.targetFrequencyHz
+
+    var driveAmplitude: Double = 1.0e-12
+
+    var drivePhase: Double = 0.0
+
+    // --------------------------------------------------------
+    // Efficiency
+    // --------------------------------------------------------
+
+    var driverEfficiency: Double = 0.80
+
+    var couplingEfficiency: Double = 0.50
+
+    // --------------------------------------------------------
+    // Frequency control
+    // --------------------------------------------------------
+
+    var frequencyToleranceFraction: Double = 0.01
+
+    var phaseGain: Double = 0.10
+
+    var powerGain: Double = 0.05
+
+    var qrtlCoupling: Double = 0.10
+
+    // --------------------------------------------------------
+    // Hydrogen
+    // --------------------------------------------------------
+
+    var hydrogenAtoms: Double = 1.0e6
+
+    var excitationProbability: Double = 0.10
+
+    var hydrogenShellEnergyEV: Double = 10.2
+
+    // --------------------------------------------------------
+    // Frequency sweep
+    // --------------------------------------------------------
+
+    var sweepStartFrequencyHz: Double = 0.0
+
+    var sweepEndFrequencyHz: Double = 2.0e15
+
+    var sweepStepFrequencyHz: Double = 1.0e13
+
+    // --------------------------------------------------------
+    // Resonance
+    // --------------------------------------------------------
+
+    var resonanceThreshold: Double = 1.0
+
+    // --------------------------------------------------------
+    // Power feedback
+    // --------------------------------------------------------
+
+    var powerFeedbackEnabled: Bool = true
+
+    // --------------------------------------------------------
+    // BBO optical crystal
+    // --------------------------------------------------------
+
+    var bbo = BBOConfiguration()
+}
+// ============================================================
+// MARK: - RESONATOR MODE
+// ============================================================
+
+struct ResonatorMode: Identifiable {
+
+    let id = UUID()
+
+    var frequencyHz: Double
+
+    var amplitude: Double
+
+    var energyJ: Double
+
+    var phase: Double
+
+    var label: String
+
+    var order: Int
+
+    var resonanceResponse: Double
+
+    var isResonant: Bool
+
+    var targetDistanceHz: Double
+}
+
+// ============================================================
+// MARK: - PIPELINE STATUS
+// ============================================================
+
+enum PipelineStageStatus {
+
+    case pending
+    case active
+    case done
+    case skipped
+    case complete
+}
+
+struct PipelineStageInfo: Identifiable {
+
+    let id = UUID()
+
+    var order: Int
+
+    var name: String
+
+    var detail: String
+
+    var status: PipelineStageStatus
+}
+
+struct QuarkResonatorState {
+
+    // --------------------------------------------------------
+    // Electrical
+    // --------------------------------------------------------
+
+    var inputVoltageV: Double = 10.0
+    var inputCurrentA: Double = 0.0
+    var inputPowerW: Double = 0.0
+    var inputEnergyJ: Double = 0.0
+
+    // --------------------------------------------------------
+    // Mechanical resonator
+    // --------------------------------------------------------
+
+    var effectiveMassKg: Double = 1.0e-30
+    var restoringConstant: Double = 39.4784176
+    var damping: Double = 1.0e-18
+
+    // --------------------------------------------------------
+    // Frequency
+    // --------------------------------------------------------
+
+    var naturalFrequencyHz: Double = 0.0
+    var outputFrequencyHz: Double = 0.0
+    var targetFrequencyHz: Double =
+        QRConstants.targetFrequencyHz
+    var frequencyErrorHz: Double = 0.0
+    var frequencyErrorPercent: Double = 0.0
+
+    // --------------------------------------------------------
+    // Motion
+    // --------------------------------------------------------
+
+    var displacement: Double = 0.0
+    var velocity: Double = 0.0
+    var acceleration: Double = 0.0
+
+    // --------------------------------------------------------
+    // Amplitude / phase
+    // --------------------------------------------------------
+
+    var amplitude: Double = 0.0
+    var targetModeAmplitude: Double = 0.0
+    var phase: Double = 0.0
+    var phaseError: Double = 0.0
+
+    // --------------------------------------------------------
+    // Energy
+    // --------------------------------------------------------
+
+    var storedEnergyJ: Double = 0.0
+    var targetModeEnergyJ: Double = 0.0
+    var generatedModeEnergyJ: Double = 0.0
+    var lossPowerW: Double = 0.0
+
+    // --------------------------------------------------------
+    // Resonance
+    // --------------------------------------------------------
+
+    var resonanceResponse: Double = 0.0
+    var resonantModeFrequencyHz: Double = 0.0
+    var resonantModeOrder: Int = 0
+
+    // --------------------------------------------------------
+    // Spectral analysis
+    // --------------------------------------------------------
+
+    var spectrumAnalyzed: Bool = false
+    var resonantModeDetected: Bool = false
+    var targetModeDetected: Bool = false
+
+    // --------------------------------------------------------
+    // Q
+    // --------------------------------------------------------
+
+    var bandwidthHz: Double = 0.0
+    var qualityFactor: Double = 0.0
+    var decayTimeS: Double = 0.0
+
+    // --------------------------------------------------------
+    // QRTL
+    // --------------------------------------------------------
+
+    var qrtlCoupling: Double = 0.10
+    var qrtlEnergyJ: Double = 0.0
+
+    // --------------------------------------------------------
+    // Hydrogen calculation retained
+    // --------------------------------------------------------
+
+    var hydrogenGroundPopulation: Double = 1.0
+    var hydrogenExcitedPopulation: Double = 0.0
+    var hydrogenShellEnergyJ: Double = 0.0
+    var hydrogenEnergyChangeJ: Double = 0.0
+    var requiredHydrogenEnergyJ: Double = 0.0
+    var requiredHydrogenPowerW: Double = 0.0
+
+    // --------------------------------------------------------
+    // Electrical requirement
+    // --------------------------------------------------------
+
+    var requiredInputPowerW: Double = 0.0
+    var requiredInputCurrentA: Double = 0.0
+
+    // --------------------------------------------------------
+    // Power feedback
+    // --------------------------------------------------------
+
+    var powerDeficitW: Double = 0.0
+    var powerFeedbackActive: Bool = false
+
+    // --------------------------------------------------------
+    // Frequency sweep
+    // --------------------------------------------------------
+
+    var frequencySearchActive: Bool = false
+    var frequencySearchCompleted: Bool = false
+    var sweepFrequencyHz: Double = 0.0
+    var bestResponseFrequencyHz: Double = 0.0
+    var bestResonanceResponse: Double = 0.0
+
+    // --------------------------------------------------------
+    // Phase
+    // --------------------------------------------------------
+
+    var phaseLocked: Bool = false
+
+    // --------------------------------------------------------
+    // Verification
+    // --------------------------------------------------------
+
+    var energyTargetReached: Bool = false
+
+    // --------------------------------------------------------
+    // QRTL resonance chain
+    // --------------------------------------------------------
+
+    var targetFrequencyLocked: Bool = false
+    var frequencyLockErrorFraction: Double = 0.0
+    var coherentCarrierActive: Bool = false
+    var coherence: Double = 0.0
+    var qrtlCoupledEnergyJ: Double = 0.0
+
+    // --------------------------------------------------------
+    // Helium-4 QRTL shell model
+    // --------------------------------------------------------
+
+    var helium4ShellEnergyJ: Double = 0.0
+    var helium4ShellTargetEnergyJ: Double = 0.0
+    var helium4ShellExcitationFraction: Double = 0.0
+    var helium4ShellExcited: Bool = false
+    var fusionTransitionReady: Bool = false
+
+    // --------------------------------------------------------
+    // BBO optical crystal
+    // --------------------------------------------------------
+
+    var bboResult: BBOResult = BBOResult()
+
+    // --------------------------------------------------------
+    // Control
+    // --------------------------------------------------------
+
+    var qrtlEnabled: Bool = true
+    var running: Bool = false
+    var statusMessage: String = "READY"
+
+    // --------------------------------------------------------
+    // Pipeline
+    // --------------------------------------------------------
+
+    var pipelineStages: [PipelineStageInfo] = []
+}
