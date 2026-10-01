@@ -119,15 +119,16 @@ struct ContentView: View {
                 .frame(minHeight: 320)
                 ScrollView {
                     VStack(spacing: 12) {
-                        pipelineStagesPanel        // ← NEW
-                        frequencyPanel
+                        controlPanel
+                        //pipelineStagesPanel        // ← NEW
+                        //frequencyPanel
                         bboPanel                   // ← NEW
                         electricalPanel
-                        resonancePanel
+                        //resonancePanel
                         energyPanel
-                        hydrogenPanel
-                        sweepPanel
-                        controlPanel
+                        //hydrogenPanel
+                        //sweepPanel
+                        
                     }
                     .padding()
                 }
