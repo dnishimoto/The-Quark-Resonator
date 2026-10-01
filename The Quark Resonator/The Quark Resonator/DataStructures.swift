@@ -6,11 +6,197 @@
 //
 
 import Foundation
+import SwiftUI
+import SceneKit
 // BBO types (BBOCrystalConfiguration, BBOConversionResult) live in BBOCrystalStage.swift
 
-// ============================================================
-// MARK: - CONSTANTS
-// ============================================================
+enum FusionConstants {
+    /// QRTL conceptual drive frequency.
+    static let resonatorFrequencyHz: Double = 1.0e15
+
+    /// Effective fusion energy used by the supplied QRTL model.
+    /// The model treats the complete H -> He-4 event as one effective event.
+    static let effectiveFusionEnergyMeV: Double = 23.8
+
+    static let mevToJoule: Double = 1.602_176_634e-13
+
+    /// Four hydrogen nuclei are consumed for one modeled He-4 event.
+    static let protonsPerFusion: Int = 4
+}
+
+// MARK: - QRTL Resonance Model
+
+struct QRTLModel {
+
+    /// Phase error from fractional detuning of the QRTL drive.
+    static func phaseError(detuningPPM: Double) -> Double {
+        min(2.0, abs(detuningPPM) * 0.065)
+    }
+
+    /// QRTL quark coherence.
+    static func coherence(
+        detuningPPM: Double,
+        magneticField: Double
+    ) -> Double {
+        let error = phaseError(detuningPPM: detuningPPM)
+
+        let gaussian =
+            exp(
+                -error * error /
+                (2.0 * 0.85 * 0.85)
+            )
+
+        let vacuumCoupling =
+            1.0 +
+            0.35 *
+            tanh((magneticField - 6.5) / 2.0)
+
+        return min(
+            1.0,
+            max(0.0, gaussian * vacuumCoupling)
+        )
+    }
+
+    /// QRTL lattice-order parameter.
+    static func latticeOrder(
+        coherence: Double,
+        magneticField: Double
+    ) -> Double {
+        guard coherence > 0.62 else {
+            return 0.0
+        }
+
+        let normalizedB =
+            min(
+                1.0,
+                max(
+                    0.0,
+                    (magneticField - 4.0) / 8.0
+                )
+            )
+
+        let t =
+            min(
+                1.0,
+                max(
+                    0.0,
+                    (coherence - 0.62) / 0.38
+                )
+            )
+
+        return min(
+            1.0,
+            pow(t, 3.5) *
+            (1.0 + 0.4 * normalizedB)
+        )
+    }
+
+    /// Probability that the QRTL proton population enters
+    /// the synchronized lattice state.
+    static func latticeProbability(
+        coherence: Double
+    ) -> Double {
+        1.0 /
+        (
+            1.0 +
+            exp(-15.0 * (coherence - 0.64))
+        )
+    }
+
+    /// Conceptual fusion-gate probability.
+    ///
+    /// The four-proton reaction is only evaluated when the
+    /// QRTL lattice is sufficiently coherent and ordered.
+    static func fusionProbability(
+        coherence: Double,
+        latticeOrder: Double,
+        latticeProbability: Double,
+        yieldScale: Double
+    ) -> Double {
+        guard coherence > 0.85,
+              latticeOrder > 0.60
+        else {
+            return 0.0
+        }
+
+        let nonlinearCoherence = pow(coherence, 4.0)
+        let nonlinearOrder = pow(latticeOrder, 2.0)
+
+        let probability =
+            0.04 *
+            nonlinearCoherence *
+            nonlinearOrder *
+            latticeProbability *
+            yieldScale
+
+        return min(1.0, max(0.0, probability))
+    }
+}
+
+// MARK: - Species
+
+enum Species: String {
+    case proton
+    case helium4
+
+    var symbol: String {
+        switch self {
+        case .proton:
+            return "p"
+        case .helium4:
+            return "⁴He"
+        }
+    }
+
+    var color: UIColor {
+        switch self {
+        case .proton:
+            return UIColor.orange
+        case .helium4:
+            return UIColor.yellow
+        }
+    }
+
+    var radius: CGFloat {
+        switch self {
+        case .proton:
+            return 0.22
+        case .helium4:
+            return 0.34
+        }
+    }
+}
+
+// MARK: - Fusion Event
+
+struct FusionEvent {
+    let protonsConsumed: Int
+    let heliumProduced: Int
+    let energyMeV: Double
+
+    static let hydrogenToHelium4 = FusionEvent(
+        protonsConsumed: FusionConstants.protonsPerFusion,
+        heliumProduced: 1,
+        energyMeV: FusionConstants.effectiveFusionEnergyMeV
+    )
+}
+
+// MARK: - Particle
+
+final class FusionParticle {
+    let node: SCNNode
+    var species: Species
+    var coupled: Bool = false
+
+    init(
+        node: SCNNode,
+        species: Species
+    ) {
+        self.node = node
+        self.species = species
+    }
+}
+
 
 enum QRConstants {
 
