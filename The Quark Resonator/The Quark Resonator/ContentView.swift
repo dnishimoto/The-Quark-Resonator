@@ -150,6 +150,25 @@ struct ContentView: View {
                         state: engine.state
                     )
                     .frame(minHeight: 320)
+                    .overlay(alignment: .topTrailing) {
+                        // The fusion chamber at the UV end runs automatically at 1e15 Hz.
+                        // This opens the detailed fusion simulator on request.
+                        if engine.state.targetFrequencyLocked ||
+                            engine.state.outputFrequencyHz >= 1.0e15 {
+                            Button {
+                                showFusionSimulator = true
+                                fusionSimulator.startSimulation()
+                            } label: {
+                                Text("Fusion Detail")
+                                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.6))
+                                    .foregroundColor(.white)
+                                    .clipShape(Capsule())
+                            }
+                            .padding(8)
+                        }
+                    }
                     ScrollView {
                         VStack(spacing: 12) {
                             controlPanel
@@ -173,12 +192,6 @@ struct ContentView: View {
             .onDisappear {
                 stopTimer()
                 engine.stop()
-            }
-            .onChange(of: engine.state.outputFrequencyHz) { newValue in
-                if newValue >= 1.0e15 && !showFusionSimulator {
-                    showFusionSimulator = true
-                    fusionSimulator.startSimulation()
-                }
             }
         }
     }
@@ -585,10 +598,6 @@ struct ContentView: View {
             Task { @MainActor in
                 engine.step(deltaTime: 0.016)
                 sceneController.update(state: engine.state)
-                if engine.state.outputFrequencyHz >= 1.0e15 && !showFusionSimulator {
-                    showFusionSimulator = true
-                    fusionSimulator.startSimulation()
-                }
             }
         }
     }

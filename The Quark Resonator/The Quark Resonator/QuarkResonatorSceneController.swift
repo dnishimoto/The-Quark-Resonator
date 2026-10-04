@@ -39,6 +39,7 @@ final class QuarkResonatorSceneController: ObservableObject {
     private let carrierNode = SCNNode()
 
     private let bboStage = BBOCrystalStageNode()
+    private let fusionChamber = FusionChamberStageNode()
 
     private let cameraNode = SCNNode()
     private let cameraTargetNode = SCNNode()
@@ -93,6 +94,7 @@ final class QuarkResonatorSceneController: ObservableObject {
         buildEnergyPath()
         buildFrequencyReadout()
         buildBBOStage()
+        buildFusionChamberStage()
 
         configureCamera()
         configureLighting()
@@ -1008,6 +1010,31 @@ final class QuarkResonatorSceneController: ObservableObject {
     }
 
     // ========================================================
+    // MARK: Fusion Chamber Stage (end of the UV output)
+    // ========================================================
+
+    /// BBO stage origin X.
+    private let bboStageOriginX: Float = 7.6
+
+    /// The BBO "UV OUT" port is a 0.4 long cylinder centred at local x = 2.6,
+    /// so its open end is at local x = 2.8.
+    private let bboUVPortEndLocalX: Float = 2.6 + 0.2
+
+    private func buildFusionChamberStage() {
+
+        fusionChamber.position =
+            SCNVector3(
+                bboStageOriginX + bboUVPortEndLocalX,
+                0,
+                0
+            )
+
+        equipmentRoot.addChildNode(
+            fusionChamber
+        )
+    }
+
+    // ========================================================
     // MARK: Camera
     // ========================================================
 
@@ -1025,16 +1052,20 @@ final class QuarkResonatorSceneController: ObservableObject {
         cameraNode.camera?.zFar =
             1000
 
+        // Frames the whole bench from the left chamber end (x = -6)
+        // to the far side of the fusion chamber (x = ~14).
+        let sceneCenterX: Float = 4.0
+
         cameraNode.position =
             SCNVector3(
-                2.25,
-                4.0,
-                25.0
+                sceneCenterX,
+                4.5,
+                31.0
             )
 
         cameraTargetNode.position =
             SCNVector3(
-                2.25,
+                sceneCenterX,
                 0,
                 0
             )
@@ -1204,6 +1235,37 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         bboStage.update(
             result: state.bboResult,
+            running: state.running
+        )
+
+        // UV leaving the BBO crystal feeds the fusion chamber.
+        let bbo = state.bboResult
+
+        let uvActive =
+            state.running &&
+            bbo.isPhaseMatchable &&
+            bbo.pumpTransmitted &&
+            bbo.outputTransmitted
+
+        let uvStrength =
+            uvActive
+            ? max(
+                0.0,
+                min(
+                    1.0,
+                    bbo.conversionEfficiency.squareRoot()
+                )
+              )
+            : 0.0
+
+        // Once the output is locked on the 1e15 Hz target the chamber runs its own sequence:
+        // EM coils -> hydrogen injection -> UV resonance -> fusion prediction.
+        fusionChamber.update(
+            frequencyHz: state.outputFrequencyHz,
+            lockErrorFraction: state.frequencyLockErrorFraction,
+            targetLocked: state.targetFrequencyLocked,
+            uvStrength: uvStrength,
+            shellExcited: state.helium4ShellExcited,
             running: state.running
         )
     }
@@ -1801,4 +1863,6 @@ final class QuarkResonatorSceneController: ObservableObject {
         )
     }
 }
+
+
 
