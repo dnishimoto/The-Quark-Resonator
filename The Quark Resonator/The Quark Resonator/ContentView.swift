@@ -3,22 +3,21 @@
 //  The Quark Resonator
 //
 //  Main screen. Shared types live in their own files:
-//    DataStructures.swift                 QRConstants, ResonatorConfiguration, ResonatorMode,
-//                                         PipelineStageStatus, PipelineStageInfo, QuarkResonatorState
-//    QuarkResonatorEngine.swift           QuarkResonatorEngine
-//    QuarkResonatorSceneController.swift  QuarkResonatorSceneController
-//    QuarkResonatorSceneView.swift        QuarkResonatorSceneView
-//    BBOCrystalStage.swift                BBO crystal model and 3D stage
 //
-//  Added here: BBO CRYSTAL panel.
+//  DataStructures.swift                  QRConstants, ResonatorConfiguration,
+//                                         ResonatorMode, PipelineStageStatus,
+//                                         PipelineStageInfo, QuarkResonatorState
+//
+//  QuarkResonatorEngine.swift            QuarkResonatorEngine
+//  QuarkResonatorSceneController.swift   QuarkResonatorSceneController
+//  QuarkResonatorSceneView.swift         QuarkResonatorSceneView
+//  BBOCrystalStage.swift                 BBO crystal model and 3D stage
 //
 
 import SwiftUI
 import SceneKit
 import Combine
 import UIKit
-
-// MARK: - Content View
 
 struct ContentView: View {
 
@@ -30,27 +29,49 @@ struct ContentView: View {
     @State private var showFusionSimulator = false
     @State private var fusionZoomedIn = false
 
-    private var estimatedShellEnergyEV: Double {
+    private let simulationTimeStep = 1.0 / 60.0
 
-        engine.state.qrtlEnergyJ /
-        QRConstants.electronVolt
+    private var shellStoredEnergyEV: Double {
+        fusionSimulator.shellStoredEnergyJ / QRConstants.electronVolt
     }
 
-    // MARK: - Live Activity Helper
+    private var shellReleasedEnergyEV: Double {
+        fusionSimulator.shellEnergyReleasedJ / QRConstants.electronVolt
+    }
 
-    private var liveActivity: (title: String, detail: String, color: Color, progress: Double?) {
-        let s = engine.state
+    private var latticeEnergyInputEV: Double {
+        fusionSimulator.latticeEnergyInputJ / QRConstants.electronVolt
+    }
 
-        if !s.running {
-            return ("IDLE", "Press START to begin frequency search", .gray, nil)
+    private var liveActivity: (
+        title: String,
+        detail: String,
+        color: Color,
+        progress: Double?
+    ) {
+        let state = engine.state
+
+        guard state.running else {
+            return (
+                "IDLE",
+                "Press START to begin frequency search",
+                .gray,
+                nil
+            )
         }
 
-        if s.frequencySearchActive {
+        if state.frequencySearchActive {
             let totalRange = max(
-                engine.configuration.sweepEndFrequencyHz - engine.configuration.sweepStartFrequencyHz,
+                engine.configuration.sweepEndFrequencyHz
+                    - engine.configuration.sweepStartFrequencyHz,
                 1.0
             )
-            let current = max(0, s.sweepFrequencyHz - engine.configuration.sweepStartFrequencyHz)
+
+            let current = max(
+                0,
+                state.sweepFrequencyHz - engine.configuration.sweepStartFrequencyHz
+            )
+
             let progress = min(1.0, current / totalRange)
 
             return (
@@ -61,7 +82,7 @@ struct ContentView: View {
             )
         }
 
-        if s.frequencySearchCompleted && !s.targetModeDetected {
+        if state.frequencySearchCompleted && !state.targetModeDetected {
             return (
                 "RESONANT MODE FOUND",
                 "Best mode identified – driving resonator",
@@ -70,8 +91,8 @@ struct ContentView: View {
             )
         }
 
-        if s.targetModeDetected {
-            if s.powerFeedbackActive {
+        if state.targetModeDetected {
+            if state.powerFeedbackActive {
                 return (
                     "INCREASING POWER",
                     "Raising current to meet energy demand",
@@ -79,7 +100,8 @@ struct ContentView: View {
                     nil
                 )
             }
-            if s.phaseLocked {
+
+            if state.phaseLocked {
                 return (
                     "PHASE LOCKED + TARGET MODE",
                     "Resonator locked on target frequency",
@@ -87,6 +109,7 @@ struct ContentView: View {
                     nil
                 )
             }
+
             return (
                 "TARGET MODE ACTIVE",
                 "Driving at target frequency",
@@ -97,106 +120,111 @@ struct ContentView: View {
 
         return (
             "RUNNING",
-            s.statusMessage,
+            state.statusMessage,
             .blue,
             nil
         )
     }
 
     var body: some View {
-        if showFusionSimulator {
-            ZStack(alignment: .topTrailing) {
-                FusionResonatorSceneView(simulator: fusionSimulator, isZoomedIn: $fusionZoomedIn)
-                    .ignoresSafeArea()
-                VStack(alignment: .trailing, spacing: 10) {
-                    Button {
-                        showFusionSimulator = false
-                        fusionSimulator.stopSimulation()
-                    } label: {
-                        Text("Return")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .padding(10)
-                            .background(Color.black.opacity(0.6))
-                            .foregroundColor(.white)
-                            .clipShape(Capsule())
-                    }
-                    Button {
-                        fusionZoomedIn.toggle()
-                    } label: {
-                        Text(fusionZoomedIn ? "Zoom Out" : "Zoom In")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .padding(10)
-                            .background(Color.black.opacity(0.6))
-                            .foregroundColor(.white)
-                            .clipShape(Capsule())
-                    }
-                }
-                .padding()
+        ZStack {
+            if showFusionSimulator {
+                fusionSimulatorScreen
+            } else {
+                mainScreen
             }
-        } else {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        }
+        .onAppear {
+            sceneController.update(state: engine.state)
+        }
+        .onDisappear {
+            stopTimer()
+            engine.stop()
+            fusionSimulator.stopSimulation()
+        }
+    }
 
-                VStack(spacing: 0) {
-                    liveActivityPanel          // ← moved to top of screen
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
+    private var fusionSimulatorScreen: some View {
+        ZStack(alignment: .topTrailing) {
+            FusionResonatorSceneView(
+                simulator: fusionSimulator,
+                isZoomedIn: $fusionZoomedIn
+            )
+            .ignoresSafeArea()
 
-                    frequencyKey
+            VStack(alignment: .trailing, spacing: 10) {
+                Button {
+                    showFusionSimulator = false
+                    fusionSimulator.stopSimulation()
+                } label: {
+                    overlayButtonLabel("Return")
+                }
 
-                    QuarkResonatorSceneView(
-                        controller: sceneController,
-                        state: engine.state
-                    )
-                    .frame(minHeight: 320)
-                    .overlay(alignment: .topTrailing) {
-                        // The fusion chamber at the UV end runs automatically at 1e15 Hz.
-                        // This opens the detailed fusion simulator on request.
-                        if engine.state.targetFrequencyLocked ||
-                            engine.state.outputFrequencyHz >= 1.0e15 {
-                            Button {
-                                showFusionSimulator = true
-                                fusionSimulator.startSimulation()
-                            } label: {
-                                Text("Fusion Detail")
-                                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    .padding(8)
-                                    .background(Color.black.opacity(0.6))
-                                    .foregroundColor(.white)
-                                    .clipShape(Capsule())
-                            }
-                            .padding(8)
-                        }
-                    }
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            controlPanel
-                            //pipelineStagesPanel        // ← NEW
-                            //frequencyPanel
-                            bboPanel                   // ← NEW
-                            electricalPanel
-                            //resonancePanel
-                            energyPanel
-                            //hydrogenPanel
-                            //sweepPanel
-                            
-                        }
-                        .padding()
-                    }
+                Button {
+                    fusionZoomedIn.toggle()
+                } label: {
+                    overlayButtonLabel(fusionZoomedIn ? "Zoom Out" : "Zoom In")
                 }
             }
-            .onAppear {
-                sceneController.update(state: engine.state)
-            }
-            .onDisappear {
-                stopTimer()
-                engine.stop()
+            .padding()
+        }
+    }
+
+    private var mainScreen: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                liveActivityPanel
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                frequencyKey
+
+                QuarkResonatorSceneView(
+                    controller: sceneController,
+                    state: engine.state
+                )
+                .frame(minHeight: 320)
+                .overlay(alignment: .topTrailing) {
+                    if engine.state.targetFrequencyLocked
+                        || engine.state.outputFrequencyHz >= 1.0e15 {
+
+                        Button {
+                            fusionZoomedIn = false
+                            showFusionSimulator = true
+                            fusionSimulator.startSimulation()
+                        } label: {
+                            overlayButtonLabel("Fusion Detail")
+                        }
+                        .padding(8)
+                    }
+                }
+
+                ScrollView {
+                    VStack(spacing: 12) {
+                        controlPanel
+                        bboPanel
+                        electricalPanel
+                        energyPanel
+                    }
+                    .padding()
+                }
             }
         }
     }
 
-    // MARK: - Live Activity Panel (NEW)
+    private func overlayButtonLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .bold, design: .monospaced))
+            .padding(8)
+            .background(Color.black.opacity(0.6))
+            .foregroundStyle(.white)
+            .clipShape(Capsule())
+    }
+
+    // MARK: - Live Activity Panel
 
     private var liveActivityPanel: some View {
         let activity = liveActivity
@@ -206,29 +234,30 @@ struct ContentView: View {
                 Circle()
                     .fill(activity.color)
                     .frame(width: 12, height: 12)
-                    .overlay(
+                    .overlay {
                         Circle()
                             .stroke(activity.color.opacity(0.4), lineWidth: 4)
                             .scaleEffect(engine.state.running ? 1.6 : 1.0)
                             .opacity(engine.state.running ? 0 : 1)
                             .animation(
                                 engine.state.running
-                                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                    ? .easeInOut(duration: 0.9)
+                                        .repeatForever(autoreverses: true)
                                     : .default,
                                 value: engine.state.running
                             )
-                    )
+                    }
 
                 Text(activity.title)
                     .font(.system(size: 16, weight: .bold, design: .monospaced))
-                    .foregroundColor(activity.color)
+                    .foregroundStyle(activity.color)
 
                 Spacer()
 
                 if engine.state.running {
                     Text("LIVE")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.black)
+                        .foregroundStyle(.black)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(activity.color)
@@ -238,7 +267,7 @@ struct ContentView: View {
 
             Text(activity.detail)
                 .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundStyle(.white.opacity(0.85))
 
             if let progress = activity.progress {
                 ProgressView(value: progress)
@@ -247,28 +276,31 @@ struct ContentView: View {
 
                 Text(String(format: "Sweep Progress  %.1f%%", progress * 100))
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.gray)
+                    .foregroundStyle(.gray)
             }
 
-            // Quick live numbers while searching
             if engine.state.frequencySearchActive {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Current")
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundStyle(.gray)
+
                         Text(formatFrequency(engine.state.sweepFrequencyHz))
                             .font(.system(size: 13, design: .monospaced))
-                            .foregroundColor(.cyan)
+                            .foregroundStyle(.cyan)
                     }
+
                     Spacer()
+
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("Best so far")
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundStyle(.gray)
+
                         Text(formatFrequency(engine.state.bestResponseFrequencyHz))
                             .font(.system(size: 13, design: .monospaced))
-                            .foregroundColor(.green)
+                            .foregroundStyle(.green)
                     }
                 }
                 .padding(.top, 4)
@@ -278,55 +310,69 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
+        .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(activity.color.opacity(0.5), lineWidth: 1)
-        )
+        }
     }
 
-    // MARK: - Pipeline Stages Panel (NEW)
+    // MARK: - Pipeline Stages
 
     private var pipelineStagesPanel: some View {
         panel(title: "SIMULATION PIPELINE") {
             VStack(alignment: .leading, spacing: 0) {
                 let stages = engine.state.pipelineStages
 
-                ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
-                    pipelineStageRow(stage: stage, isLast: index == stages.count - 1)
+                ForEach(
+                    Array(stages.enumerated()),
+                    id: \.element.id
+                ) { index, stage in
+                    pipelineStageRow(
+                        stage: stage,
+                        isLast: index == stages.count - 1
+                    )
                 }
 
                 if stages.isEmpty {
                     Text("No pipeline data yet — press START.")
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(.gray)
+                        .foregroundStyle(.gray)
                 }
             }
         }
     }
 
-    private func pipelineStageRow(stage: PipelineStageInfo, isLast: Bool) -> some View {
+    private func pipelineStageRow(
+        stage: PipelineStageInfo,
+        isLast: Bool
+    ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 0) {
                 ZStack {
                     Circle()
                         .fill(pipelineStageColor(stage.status))
                         .frame(width: 22, height: 22)
+
                     Text("\(stage.order)")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(.black)
+                        .foregroundStyle(.black)
                 }
-                .overlay(
+                .overlay {
                     Circle()
-                        .stroke(pipelineStageColor(stage.status).opacity(0.5), lineWidth: 3)
+                        .stroke(
+                            pipelineStageColor(stage.status).opacity(0.5),
+                            lineWidth: 3
+                        )
                         .scaleEffect(1.5)
                         .opacity(stage.status == .active ? 1 : 0)
                         .animation(
                             stage.status == .active
-                                ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                ? .easeInOut(duration: 0.9)
+                                    .repeatForever(autoreverses: true)
                                 : .default,
                             value: stage.status
                         )
-                )
+                }
 
                 if !isLast {
                     Rectangle()
@@ -337,52 +383,40 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(stage.name)
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white)
-                
-                }
+                Text(stage.name)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
+
                 Text(stage.detail)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.gray)
+                    .foregroundStyle(.gray)
             }
             .padding(.bottom, isLast ? 2 : 14)
         }
     }
 
-    private func pipelineStageColor(
-        _ status: PipelineStageStatus
-    ) -> Color {
-
+    private func pipelineStageColor(_ status: PipelineStageStatus) -> Color {
         switch status {
-
         case .pending:
             return .gray
-
         case .active:
             return .cyan
-
-        case .done:
+        case .done, .complete:
             return .green
-
         case .skipped:
             return .white.opacity(0.3)
-
-        case .complete:
-            return .green
         }
     }
 
-    // MARK: - Frequency Key (slightly improved)
+    // MARK: - Frequency Key
 
     private var frequencyKey: some View {
-        VStack(spacing: 4) {
+        let fusion = hydrogenFusionStatus
+
+        return VStack(spacing: 4) {
             Text("QUARK RESONATOR")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(.white)
-
-            let fusion = hydrogenFusionStatus
 
             HStack(spacing: 8) {
                 Circle()
@@ -391,31 +425,42 @@ struct ContentView: View {
 
                 Text(fusion.title)
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundColor(fusion.color)
+                    .foregroundStyle(fusion.color)
             }
 
-            Text(String(format: "Shell Energy: %.3e eV", estimatedShellEnergyEV))
+            Text(String(format: "Shell Stored: %.3e eV", shellStoredEnergyEV))
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
+
+            Text(String(format: "Shell Released: %.3e eV", shellReleasedEnergyEV))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+
+            Text(String(format: "Lattice Input: %.3e eV", latticeEnergyInputEV))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
 
             Text(fusion.detail)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundColor(.gray)
+                .foregroundStyle(.gray)
                 .multilineTextAlignment(.center)
 
-            Divider().background(Color.white.opacity(0.2))
+            Divider()
+                .overlay(Color.white.opacity(0.2))
 
             Text("TARGET  \(formatFrequency(QRConstants.targetFrequencyHz))")
                 .font(.system(size: 20, weight: .bold, design: .monospaced))
-                .foregroundColor(.cyan)
+                .foregroundStyle(.cyan)
 
             Text("ACTUAL  \(formatFrequency(engine.state.outputFrequencyHz))")
                 .font(.system(size: 15, weight: .medium, design: .monospaced))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
 
             Text(engine.state.statusMessage)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(engine.state.targetModeDetected ? .green : .orange)
+                .foregroundStyle(
+                    engine.state.targetModeDetected ? Color.green : Color.orange
+                )
                 .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
@@ -423,107 +468,224 @@ struct ContentView: View {
         .background(Color.black.opacity(0.85))
     }
 
-    // MARK: - Fusion Status (unchanged logic)
+    // MARK: - Fusion Status
 
-    private var hydrogenFusionStatus: (title: String, color: Color, detail: String) {
-        let energyEV = estimatedShellEnergyEV
+    private var hydrogenFusionStatus: (
+        title: String,
+        color: Color,
+        detail: String
+    ) {
+        let energyEV = shellStoredEnergyEV
         let coupling = engine.state.qrtlCoupling
-        let isFrequencyLocked =
-            abs(engine.state.frequencyErrorHz) <=
-            max(QRConstants.targetFrequencyHz * 1.0e-6, 1.0)
+
+        let frequencyToleranceHz = max(
+            QRConstants.targetFrequencyHz * 1.0e-6,
+            1.0
+        )
+
+        let isFrequencyLocked = abs(engine.state.frequencyErrorHz)
+            <= frequencyToleranceHz
 
         let fusionRelevantEnergyEV = 10_000.0
 
-        if !energyEV.isFinite || !coupling.isFinite {
-            return ("FUSION STATUS: INVALID INPUT", .red, "Energy or coupling is not finite.")
+        guard energyEV.isFinite, coupling.isFinite else {
+            return (
+                "FUSION STATUS: INVALID INPUT",
+                .red,
+                "Energy or coupling is not finite."
+            )
         }
 
-        if energyEV >= fusionRelevantEnergyEV && coupling >= 0.90 && isFrequencyLocked {
-            return ("FUSION STATUS: CONDITIONS MET", .green,
-                    "Model energy, coupling, and frequency-lock criteria are met.")
+        if energyEV >= fusionRelevantEnergyEV
+            && coupling >= 0.90
+            && isFrequencyLocked {
+
+            return (
+                "FUSION STATUS: CONDITIONS MET",
+                .green,
+                "Model energy, coupling, and frequency-lock criteria are met."
+            )
         }
 
         if energyEV >= fusionRelevantEnergyEV {
-            return ("FUSION STATUS: ENERGY REGIME ONLY", .yellow,
-                    "Energy criterion is met; coupling or frequency lock is insufficient.")
+            return (
+                "FUSION STATUS: ENERGY REGIME ONLY",
+                .yellow,
+                "Energy criterion is met; coupling or frequency lock is insufficient."
+            )
         }
 
-        return ("FUSION STATUS: NOT PLAUSIBLE", .orange,
-                "Shell-energy change is below the model fusion-energy threshold.")
+        return (
+            "FUSION STATUS: NOT PLAUSIBLE",
+            .orange,
+            "Shell-energy change is below the model fusion-energy threshold."
+        )
     }
 
-    // MARK: - BBO Crystal Panel (NEW)
+    // MARK: - BBO Crystal Panel
 
     private var bboPanel: some View {
-        let r = engine.state.bboResult
-        let windowOK = r.pumpTransmitted && r.outputTransmitted
+        let result = engine.state.bboResult
+        let windowOK = result.pumpTransmitted && result.outputTransmitted
 
         return panel(title: "BBO CRYSTAL (SHG)") {
-            valueRow("Pump",
-                     String(format: "%.4e Hz (%.1f nm)",
-                            engine.configuration.bbo.pumpFrequencyHz,
-                            r.pumpWavelengthNm))
-            valueRow("Output",
-                     String(format: "%.4e Hz (%.1f nm)",
-                            r.outputFrequencyHz,
-                            r.outputWavelengthNm))
-            valueRow("Phase-Match Angle",
-                     r.phaseMatchAngleRad.map {
-                         String(format: "%.3f°", $0 * 180.0 / Double.pi)
-                     } ?? "NONE")
-            valueRow("Phase Mismatch",
-                     String(format: "%.3e rad/m", r.phaseMismatchRadPerM))
-            valueRow("d_eff",
-                     String(format: "%.3f pm/V", r.effectiveNonlinearityPmPerV))
-            valueRow("Conversion",
-                     String(format: "%.2f%%", r.conversionEfficiency * 100.0))
+            valueRow(
+                "Pump",
+                String(
+                    format: "%.4e Hz (%.1f nm)",
+                    engine.configuration.bbo.pumpFrequencyHz,
+                    result.pumpWavelengthNm
+                )
+            )
+
+            valueRow(
+                "Output",
+                String(
+                    format: "%.4e Hz (%.1f nm)",
+                    result.outputFrequencyHz,
+                    result.outputWavelengthNm
+                )
+            )
+
+            valueRow(
+                "Phase-Match Angle",
+                result.phaseMatchAngleRad.map {
+                    String(format: "%.3f°", $0 * 180.0 / .pi)
+                } ?? "NONE"
+            )
+
+            valueRow(
+                "Phase Mismatch",
+                String(format: "%.3e rad/m", result.phaseMismatchRadPerM)
+            )
+
+            valueRow(
+                "d_eff",
+                String(format: "%.3f pm/V", result.effectiveNonlinearityPmPerV)
+            )
+
+            valueRow(
+                "Conversion",
+                String(format: "%.2f%%", result.conversionEfficiency * 100.0)
+            )
+
             valueRow("In BBO Window", windowOK ? "TRUE" : "FALSE")
         }
     }
 
-    // MARK: - All other panels (unchanged)
+    // MARK: - Diagnostic Panels
 
     private var frequencyPanel: some View {
         panel(title: "FREQUENCY") {
-            valueRow("Natural Frequency", formatFrequency(engine.state.naturalFrequencyHz))
-            valueRow("Output Frequency", formatFrequency(engine.state.outputFrequencyHz))
-            valueRow("Target Frequency", formatFrequency(engine.state.targetFrequencyHz))
-            valueRow("Error", String(format: "%.6f%%", engine.state.frequencyErrorPercent))
-            valueRow("Target Detected", engine.state.targetModeDetected ? "TRUE" : "FALSE")
+            valueRow(
+                "Natural Frequency",
+                formatFrequency(engine.state.naturalFrequencyHz)
+            )
+            valueRow(
+                "Output Frequency",
+                formatFrequency(engine.state.outputFrequencyHz)
+            )
+            valueRow(
+                "Target Frequency",
+                formatFrequency(engine.state.targetFrequencyHz)
+            )
+            valueRow(
+                "Error",
+                String(format: "%.6f%%", engine.state.frequencyErrorPercent)
+            )
+            valueRow(
+                "Target Detected",
+                engine.state.targetModeDetected ? "TRUE" : "FALSE"
+            )
         }
     }
 
     private var electricalPanel: some View {
         panel(title: "ELECTRICAL INPUT") {
-            valueRow("Voltage", String(format: "%.4f V", engine.state.inputVoltageV))
-            valueRow("Current", String(format: "%.6f A", engine.state.inputCurrentA))
+            valueRow(
+                "Voltage",
+                String(format: "%.4f V", engine.state.inputVoltageV)
+            )
+            valueRow(
+                "Current",
+                String(format: "%.6f A", engine.state.inputCurrentA)
+            )
             valueRow("Input Power", formatPower(engine.state.inputPowerW))
             valueRow("Input Energy", formatEnergy(engine.state.inputEnergyJ))
-            valueRow("Required Power", formatPower(engine.state.requiredInputPowerW))
-            valueRow("Power Deficit", formatPower(engine.state.powerDeficitW))
-            valueRow("Feedback", engine.state.powerFeedbackActive ? "INCREASING" : "HOLD")
+            valueRow(
+                "Required Power",
+                formatPower(engine.state.requiredInputPowerW)
+            )
+            valueRow(
+                "Power Deficit",
+                formatPower(engine.state.powerDeficitW)
+            )
+            valueRow(
+                "Feedback",
+                engine.state.powerFeedbackActive ? "INCREASING" : "HOLD"
+            )
         }
     }
 
     private var resonancePanel: some View {
         panel(title: "RESONATOR MODE") {
-            valueRow("Mode",
-                     engine.state.resonantModeDetected ? "\(engine.state.resonantModeOrder)" : "NONE")
-            valueRow("Mode Frequency", formatFrequency(engine.state.resonantModeFrequencyHz))
-            valueRow("Resonance Response", String(format: "%.6f", engine.state.resonanceResponse))
-            valueRow("Mode Amplitude", formatScientific(engine.state.targetModeAmplitude))
+            valueRow(
+                "Mode",
+                engine.state.resonantModeDetected
+                    ? "\(engine.state.resonantModeOrder)"
+                    : "NONE"
+            )
+            valueRow(
+                "Mode Frequency",
+                formatFrequency(engine.state.resonantModeFrequencyHz)
+            )
+            valueRow(
+                "Resonance Response",
+                String(format: "%.6f", engine.state.resonanceResponse)
+            )
+            valueRow(
+                "Mode Amplitude",
+                formatScientific(engine.state.targetModeAmplitude)
+            )
             valueRow("Q", formatScientific(engine.state.qualityFactor))
             valueRow("Bandwidth", formatFrequency(engine.state.bandwidthHz))
-            valueRow("Decay Time", formatScientific(engine.state.decayTimeS))
+            valueRow(
+                "Decay Time",
+                formatScientific(engine.state.decayTimeS)
+            )
         }
     }
 
     private var energyPanel: some View {
         panel(title: "ENERGY") {
             valueRow("Stored Energy", formatEnergy(engine.state.storedEnergyJ))
-            valueRow("Target Mode Energy", formatEnergy(engine.state.targetModeEnergyJ))
-            valueRow("Generated Mode Energy", formatEnergy(engine.state.generatedModeEnergyJ))
-            valueRow("QRTL Energy", formatEnergy(engine.state.qrtlEnergyJ))
+            valueRow(
+                "Target Mode Energy",
+                formatEnergy(engine.state.targetModeEnergyJ)
+            )
+            valueRow(
+                "Generated Mode Energy",
+                formatEnergy(engine.state.generatedModeEnergyJ)
+            )
+            valueRow(
+                "Shell Stored",
+                formatEnergy(fusionSimulator.shellStoredEnergyJ)
+            )
+            valueRow(
+                "Shell Displacement",
+                String(
+                    format: "%.4e m",
+                    fusionSimulator.shellDisplacementM
+                )
+            )
+            valueRow(
+                "Shell Released",
+                formatEnergy(fusionSimulator.shellEnergyReleasedJ)
+            )
+            valueRow(
+                "Lattice Energy Input",
+                formatEnergy(fusionSimulator.latticeEnergyInputJ)
+            )
             valueRow("Loss Power", formatPower(engine.state.lossPowerW))
             valueRow("Input Energy", formatEnergy(engine.state.inputEnergyJ))
         }
@@ -531,29 +693,73 @@ struct ContentView: View {
 
     private var hydrogenPanel: some View {
         panel(title: "HYDROGEN") {
-            Toggle("QRTL Enabled", isOn: Binding(
-                get: { engine.state.qrtlEnabled },
-                set: { engine.setQRTLEnabled($0) }
-            ))
+            Toggle(
+                "QRTL Enabled",
+                isOn: Binding(
+                    get: { engine.state.qrtlEnabled },
+                    set: { engine.setQRTLEnabled($0) }
+                )
+            )
             .foregroundStyle(.white)
 
-            valueRow("Ground Population", String(format: "%.6f", engine.state.hydrogenGroundPopulation))
-            valueRow("Excited Population", String(format: "%.6f", engine.state.hydrogenExcitedPopulation))
-            valueRow("Shell Energy", formatEnergy(engine.state.hydrogenShellEnergyJ))
-            valueRow("Energy Change", formatEnergy(engine.state.hydrogenEnergyChangeJ))
+            valueRow(
+                "Ground Population",
+                String(
+                    format: "%.6f",
+                    engine.state.hydrogenGroundPopulation
+                )
+            )
+            valueRow(
+                "Excited Population",
+                String(
+                    format: "%.6f",
+                    engine.state.hydrogenExcitedPopulation
+                )
+            )
+            valueRow(
+                "Shell Energy",
+                formatEnergy(engine.state.hydrogenShellEnergyJ)
+            )
+            valueRow(
+                "Energy Change",
+                formatEnergy(engine.state.hydrogenEnergyChangeJ)
+            )
         }
     }
 
     private var sweepPanel: some View {
         panel(title: "FREQUENCY SEARCH") {
-            valueRow("Search Active", engine.state.frequencySearchActive ? "TRUE" : "FALSE")
-            valueRow("Search Complete", engine.state.frequencySearchCompleted ? "TRUE" : "FALSE")
-            valueRow("Sweep Frequency", formatFrequency(engine.state.sweepFrequencyHz))
-            valueRow("Best Frequency", formatFrequency(engine.state.bestResponseFrequencyHz))
-            valueRow("Best Response", String(format: "%.6f", engine.state.bestResonanceResponse))
-            valueRow("Spectrum Analyzed", engine.state.spectrumAnalyzed ? "TRUE" : "FALSE")
+            valueRow(
+                "Search Active",
+                engine.state.frequencySearchActive ? "TRUE" : "FALSE"
+            )
+            valueRow(
+                "Search Complete",
+                engine.state.frequencySearchCompleted ? "TRUE" : "FALSE"
+            )
+            valueRow(
+                "Sweep Frequency",
+                formatFrequency(engine.state.sweepFrequencyHz)
+            )
+            valueRow(
+                "Best Frequency",
+                formatFrequency(engine.state.bestResponseFrequencyHz)
+            )
+            valueRow(
+                "Best Response",
+                String(
+                    format: "%.6f",
+                    engine.state.bestResonanceResponse
+                )
+            )
+            valueRow(
+                "Spectrum Analyzed",
+                engine.state.spectrumAnalyzed ? "TRUE" : "FALSE"
+            )
         }
     }
+
+    // MARK: - Controls
 
     private var controlPanel: some View {
         panel(title: "CONTROL") {
@@ -583,23 +789,37 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             }
 
-            valueRow("Phase Error", String(format: "%.6f rad", engine.state.phaseError))
-            valueRow("Phase Locked", engine.state.phaseLocked ? "TRUE" : "FALSE")
-            valueRow("Energy Target",
-                     engine.state.energyTargetReached ? "REACHED" : "NOT REACHED")
+            valueRow(
+                "Phase Error",
+                String(format: "%.6f rad", engine.state.phaseError)
+            )
+            valueRow(
+                "Phase Locked",
+                engine.state.phaseLocked ? "TRUE" : "FALSE"
+            )
+            valueRow(
+                "Energy Target",
+                engine.state.energyTargetReached ? "REACHED" : "NOT REACHED"
+            )
         }
     }
 
-    // MARK: - Timer
+    // MARK: - Simulation Timer
 
     private func startTimer() {
         stopTimer()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-            Task { @MainActor in
-                engine.step(deltaTime: 0.016)
-                sceneController.update(state: engine.state)
-            }
+
+        let newTimer = Timer(
+            timeInterval: simulationTimeStep,
+            repeats: true
+        ) { _ in
+            engine.step(deltaTime: simulationTimeStep)
+            sceneController.update(state: engine.state)
         }
+
+        newTimer.tolerance = simulationTimeStep * 0.15
+        RunLoop.main.add(newTimer, forMode: .common)
+        timer = newTimer
     }
 
     private func stopTimer() {
@@ -607,7 +827,7 @@ struct ContentView: View {
         timer = nil
     }
 
-    // MARK: - Helpers
+    // MARK: - UI Helpers
 
     private func panel<Content: View>(
         title: String,
@@ -617,6 +837,7 @@ struct ContentView: View {
             Text(title)
                 .font(.headline)
                 .foregroundStyle(.cyan)
+
             content()
         }
         .padding()
@@ -627,8 +848,11 @@ struct ContentView: View {
 
     private func valueRow(_ title: String, _ value: String) -> some View {
         HStack {
-            Text(title).foregroundStyle(.secondary)
+            Text(title)
+                .foregroundStyle(.secondary)
+
             Spacer()
+
             Text(value)
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(.white)
@@ -663,6 +887,7 @@ extension SCNNode {
         let dx = target.x - position.x
         let dy = target.y - position.y
         let dz = target.z - position.z
+
         let horizontalDistance = sqrt(dx * dx + dz * dz)
 
         eulerAngles.y = -atan2(dx, dz)
@@ -675,4 +900,3 @@ extension SCNNode {
 #Preview {
     ContentView()
 }
-

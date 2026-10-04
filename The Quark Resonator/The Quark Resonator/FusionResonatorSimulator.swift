@@ -1,174 +1,146 @@
 //
-//  File.swift
+//  FusionResonatorSimulator.swift
 //  The Quark Resonator
 //
-//  Created by David Nishimoto on 10/1/26.
+//  Conceptual QRTL Fusion Resonator — Hydrogen → Helium-4
 //
-
-import Foundation
-
-//
-//  FusionResonatorSimulator.swift
-//  QRTL Fusion Resonator — Hydrogen → Helium-4
-//
-//  Conceptual simulation:
-//  Hydrogen protons
-//      ↓
-//  QRTL resonance lock
-//      ↓
-//  Quark coherence
-//      ↓
-//  QRTL lattice order
-//      ↓
-//  Proton lattice coupling
-//      ↓
-//  Four-proton fusion event
-//      ↓
-//  Helium-4 + 23.8 MeV effective model energy
-//      ↓
-//  Energy extraction
-//
-//  NOTE:
-//  This is a conceptual QRTL simulation model. The QRTL resonance,
-//  coherence, lattice-order, and fusion-probability relationships are
-//  model assumptions and are not established experimental fusion physics.
+//  This is a visualization/model only. QRTL resonance, coherence,
+//  lattice ordering, and reaction probability are application-defined
+//  assumptions, not established experimental fusion physics.
 //
 
 import Foundation
 import SwiftUI
 import SceneKit
 import Combine
-
-// MARK: - Constants
-
-
-// MARK: - Simulator
+import UIKit
 
 @MainActor
 final class FusionResonatorSimulator: ObservableObject {
+
+    // MARK: - Scene
 
     let scene = SCNScene()
 
     private var superCoils: [SCNNode] = []
     private var particles: [FusionParticle] = []
     private var heliumNodes: [SCNNode] = []
-
-    private var fieldLinesNode: SCNNode!
-    private var fusionEventsNode: SCNNode!
-    private var haloLight: SCNNode!
-    
     private var fusionReactorNodes: [SCNNode] = []
+
+    private var fieldLinesNode = SCNNode()
+    private var fusionEventsNode = SCNNode()
+    private var haloLight = SCNNode()
 
     private var waveParticleNode: SCNNode?
     private var waveParticlePhase: Double = 0.0
-    
     private var cameraNode: SCNNode?
 
-    // MARK: Controls
+    // MARK: - Controls
 
     @Published var detuningPPM: Double = 30.0
-
     @Published var magneticField: Double = 8.5
 
-    /// Number of simulated hydrogen nuclei.
     @Published var particleCount: Int = 40 {
         didSet {
-            particleCount = max(
-                FusionConstants.protonsPerFusion,
-                particleCount
-            )
+            let minimum = FusionConstants.protonsPerFusion
+            let clamped = max(minimum, particleCount)
 
-            if particleCount != oldValue {
-                adjustHydrogenInventory()
+            // Avoid repeatedly triggering didSet after assigning a clamp.
+            if particleCount != clamped {
+                particleCount = clamped
+                return
             }
+
+            guard particleCount != oldValue else { return }
+            adjustHydrogenInventory()
         }
     }
 
     @Published var extractionVoltageKV: Double = 10.0
-
     @Published var reactionYieldScale: Double = 1.0
-
     @Published var autoLockEnabled: Bool = true
-
-    // Zoom control
     @Published var isZoomedIn: Bool = false
 
-    // MARK: Stage 1 — Resonance
+    // MARK: - Stage 1: Resonance
 
     @Published private(set) var coherence: Double = 0.0
-
     @Published private(set) var phaseErrorRad: Double = 0.0
-
     @Published private(set) var latticeProbability: Double = 0.0
-
     @Published private(set) var latticeOrder: Double = 0.0
 
-    // MARK: Stage 2 — QRTL coupling
+    // MARK: - QRTL Energy Shell
+
+    @Published var shellStoredEnergyJ: Double = 0.0
+    @Published var shellDisplacementM: Double = 0.0
+    @Published var shellEnergyReleasedJ: Double = 0.0
+    @Published var shellPhase: String = "idle"
+    @Published var shellResonanceEnvelope: Double = 0.0
+    @Published var latticeEnergyInputJ: Double = 0.0
+
+    // MARK: - Stage 2: Coupling
 
     @Published private(set) var coupledCount: Int = 0
-
     @Published private(set) var hydrogenCount: Int = 0
 
-    // MARK: Stage 3 — H → He-4 fusion
+    // MARK: - Stage 3: Modeled Reaction
 
     @Published private(set) var heliumCount: Int = 0
-
     @Published private(set) var totalReactions: Int = 0
-
     @Published private(set) var reactionRateHz: Double = 0.0
-
     @Published private(set) var fusionProbability: Double = 0.0
 
     @Published private(set) var energyPerReactionMeV: Double =
         FusionConstants.effectiveFusionEnergyMeV
 
-    // MARK: Stage 4 — Energy
+    // MARK: - Stage 4: Energy Accounting
 
     @Published private(set) var inputPowerMW: Double = 0.0
-
     @Published private(set) var fusionPowerMW: Double = 0.0
-
     @Published private(set) var electricalOutputMW: Double = 0.0
-
     @Published private(set) var netPowerMW: Double = 0.0
-
     @Published private(set) var cumulativeNetMWh: Double = 0.0
-
     @Published private(set) var qFactor: Double = 0.0
-
     @Published private(set) var outputCurrentA: Double = 0.0
 
-    // MARK: Simulation
+    // MARK: - Simulation State
 
     @Published private(set) var isRunning: Bool = false
 
-    private let macroParticleWeight: Double = 1e18
-
+    private let simulationTimeStep = 1.0 / 60.0
+    private let macroParticleWeight: Double = 1.0e18
     private let directConversionEfficiency: Double = 0.80
 
-    private let thermalConversionEfficiency: Double = 0.35
-
     private let pairingRadius: Float = 2.0
-
     private let maxEventsPerFrame: Int = 2
 
+    private var timer: Timer?
+    private var phase: Double = 0.0
     private var frameFusionEnergyMeV: Double = 0.0
     private var frameEvents: Int = 0
-
     private var fusionPowerFilteredMW: Double = 0.0
-    private var timer: Timer?
 
-    private var phase: Double = 0.0
+    // MARK: - Shell Oscillator
 
-    // MARK: Derived
+    // f0 = sqrt(k / m) / (2π) = approximately 1e15 Hz.
+    private let shellEffectiveMassKg: Double = 1.0e-30
+    private let shellRestoringConstantNPerM: Double = 39.47841760435743
+
+    private let shellReleaseFraction: Double = 0.80
+    private let shellDriveFraction: Double = 0.10
+    private let shellMaxStoredEnergyJ: Double = 1.0e-12
+    private let shellFormationSeconds: Double = 1.0e-3
+
+    private var shellFormationTime: Double = 0.0
+    private var shellEnergyReleasedThisCycle = false
+
+    // MARK: - Derived Values
 
     var targetFrequencyHz: Double {
         FusionConstants.resonatorFrequencyHz
     }
 
     var appliedFrequencyHz: Double {
-        targetFrequencyHz *
-        (1.0 + detuningPPM * 1e-6)
+        targetFrequencyHz * (1.0 + detuningPPM * 1.0e-6)
     }
 
     var isLocked: Bool {
@@ -176,8 +148,7 @@ final class FusionResonatorSimulator: ObservableObject {
     }
 
     var isLatticeFormed: Bool {
-        latticeOrder > 0.60 &&
-        latticeProbability > 0.90
+        latticeOrder > 0.60 && latticeProbability > 0.90
     }
 
     var isFusing: Bool {
@@ -188,6 +159,17 @@ final class FusionResonatorSimulator: ObservableObject {
         electricalOutputMW > 0.05
     }
 
+    private var shellNaturalFrequencyHz: Double {
+        sqrt(shellRestoringConstantNPerM / shellEffectiveMassKg)
+            / (2.0 * Double.pi)
+    }
+
+    private var shellQualityFactor: Double {
+        max(1.0, 20.0 + 80.0 * coherence)
+    }
+
+    // MARK: - Lifecycle
+
     init() {
         setupScene()
         resetHydrogen()
@@ -196,186 +178,198 @@ final class FusionResonatorSimulator: ObservableObject {
     deinit {
         timer?.invalidate()
     }
-    
-    // MARK: Fusion Reactor Nodes
-    
-    func createFusionReactorNodes(count: Int) {
-        // Remove existing fusion reactor nodes
-        for node in fusionReactorNodes {
-            node.removeFromParentNode()
+
+    // MARK: - Public Controls
+
+    func startSimulation() {
+        guard !isRunning else { return }
+
+        isRunning = true
+        createFusionReactorNodes(count: 4)
+
+        let newTimer = Timer(
+            timeInterval: simulationTimeStep,
+            repeats: true
+        ) { [weak self] _ in
+            self?.update()
         }
-        fusionReactorNodes.removeAll()
-        
-        // Fixed positions inside the chamber to place reactor nodes
-        // Positions selected roughly spaced inside radius ~5 around center
-        let positions: [SCNVector3] = [
-            SCNVector3(-4, 0, 0),
-            SCNVector3(4, 0, 0),
-            SCNVector3(0, 4, 0),
-            SCNVector3(0, -4, 0),
-            SCNVector3(-3, 3, 0),
-            SCNVector3(3, 3, 0),
-            SCNVector3(-3, -3, 0),
-            SCNVector3(3, -3, 0)
-        ]
-        
-        let countToUse = min(count, positions.count)
-        
-        for i in 0..<countToUse {
-            // Create a glowing capsule node to represent reactor unit
-            let capsule = SCNCapsule(capRadius: 0.4, height: 1.5)
-            let material = SCNMaterial()
-            material.emission.contents = UIColor.systemOrange
-            material.diffuse.contents = UIColor.orange.withAlphaComponent(0.7)
-            material.lightingModel = .physicallyBased
-            capsule.materials = [material]
-            
-            let node = SCNNode(geometry: capsule)
-            node.position = positions[i]
-            node.name = "FusionReactorNode"
-            
-            // Add a subtle pulsing animation for glow
-            let pulseUp = SCNAction.customAction(duration: 1.0) { (node, elapsedTime) in
-                let fraction = elapsedTime / 1.0
-                let glowIntensity = 0.6 + 0.4 * sin(fraction * .pi * 2)
-                material.emission.contents = UIColor.orange.withAlphaComponent(CGFloat(glowIntensity))
-            }
-            let pulse = SCNAction.repeatForever(pulseUp)
-            node.runAction(pulse)
-            
-            scene.rootNode.addChildNode(node)
-            fusionReactorNodes.append(node)
-        }
-    }
-    
-    private func removeFusionReactorNodes() {
-        for node in fusionReactorNodes {
-            node.removeFromParentNode()
-        }
-        fusionReactorNodes.removeAll()
-    }
-    
-    // MARK: Zoom Control
-    
-    func setZoomedIn(_ zoom: Bool) {
-        guard let cameraNode = cameraNode else { return }
-        isZoomedIn = zoom
-        
-        let lookAt = SCNVector3(0, 0, 0)
-        if zoom {
-            let newPos = SCNVector3(0, 3, 8)
-            let moveAction = SCNAction.move(to: newPos, duration: 0.6)
-            moveAction.timingMode = .easeInEaseOut
-            cameraNode.runAction(moveAction)
-            cameraNode.look(at: lookAt)
-        } else {
-            let newPos = SCNVector3(0, 12, 28)
-            let moveAction = SCNAction.move(to: newPos, duration: 0.6)
-            moveAction.timingMode = .easeInEaseOut
-            cameraNode.runAction(moveAction)
-            cameraNode.look(at: lookAt)
-        }
+
+        newTimer.tolerance = simulationTimeStep * 0.15
+        RunLoop.main.add(newTimer, forMode: .common)
+        timer = newTimer
     }
 
-    // MARK: Scene Setup
+    func stopSimulation() {
+        timer?.invalidate()
+        timer = nil
+
+        isRunning = false
+        removeFusionReactorNodes()
+    }
+
+    func reset() {
+        stopSimulation()
+
+        detuningPPM = 30.0
+        magneticField = 8.5
+        particleCount = max(FusionConstants.protonsPerFusion, particleCount)
+
+        coherence = 0.0
+        phaseErrorRad = 0.0
+        latticeOrder = 0.0
+        latticeProbability = 0.0
+
+        shellStoredEnergyJ = 0.0
+        shellDisplacementM = 0.0
+        shellEnergyReleasedJ = 0.0
+        shellPhase = "idle"
+        shellResonanceEnvelope = 0.0
+        latticeEnergyInputJ = 0.0
+        shellFormationTime = 0.0
+        shellEnergyReleasedThisCycle = false
+
+        coupledCount = 0
+        hydrogenCount = 0
+        heliumCount = 0
+        totalReactions = 0
+        reactionRateHz = 0.0
+        fusionProbability = 0.0
+
+        inputPowerMW = 0.0
+        fusionPowerMW = 0.0
+        electricalOutputMW = 0.0
+        netPowerMW = 0.0
+        cumulativeNetMWh = 0.0
+        qFactor = 0.0
+        outputCurrentA = 0.0
+
+        fusionPowerFilteredMW = 0.0
+        frameFusionEnergyMeV = 0.0
+        frameEvents = 0
+        phase = 0.0
+        waveParticlePhase = 0.0
+
+        haloLight.light?.intensity = 0.0
+        fieldLinesNode.isHidden = true
+
+        removeFusionReactorNodes()
+        resetHydrogen()
+    }
+
+    func seekLock() {
+        detuningPPM = 0.0
+    }
+
+    // MARK: - Zoom
+
+    func setZoomedIn(_ zoom: Bool) {
+        guard let cameraNode else { return }
+
+        isZoomedIn = zoom
+
+        let position = zoom
+            ? SCNVector3(0, 3, 8)
+            : SCNVector3(0, 12, 28)
+
+        let move = SCNAction.move(to: position, duration: 0.6)
+        move.timingMode = .easeInEaseOut
+
+        cameraNode.runAction(move)
+        cameraNode.look(at: SCNVector3(0, 0, 0))
+    }
+
+    // MARK: - Scene Setup
 
     private func setupScene() {
         scene.background.contents = UIColor.black
 
         let camera = SCNNode()
         camera.camera = SCNCamera()
-        camera.camera?.zFar = 200
+        camera.camera?.zFar = 200.0
         camera.position = SCNVector3(0, 12, 28)
         camera.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(camera)
-        
-        self.cameraNode = camera
+        cameraNode = camera
 
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.color = UIColor(
-            white: 0.25,
-            alpha: 1.0
-        )
+        ambient.light?.color = UIColor(white: 0.25, alpha: 1.0)
         scene.rootNode.addChildNode(ambient)
 
-        haloLight = SCNNode()
         haloLight.light = SCNLight()
         haloLight.light?.type = .omni
         haloLight.light?.color = UIColor.orange
-        haloLight.light?.intensity = 0
+        haloLight.light?.intensity = 0.0
+        haloLight.position = SCNVector3(0, 0, 0)
         scene.rootNode.addChildNode(haloLight)
 
-        let chamber = SCNNode(
-            geometry: SCNSphere(radius: 8)
-        )
-
-        chamber.geometry?
-            .firstMaterial?
-            .diffuse.contents =
+        let chamber = SCNNode(geometry: SCNSphere(radius: 8.0))
+        chamber.geometry?.firstMaterial?.diffuse.contents =
             UIColor.systemBlue.withAlphaComponent(0.06)
-
-        chamber.geometry?
-            .firstMaterial?
-            .isDoubleSided = true
-
-        chamber.geometry?
-            .firstMaterial?
-            .lightingModel = .constant
-
+        chamber.geometry?.firstMaterial?.isDoubleSided = true
+        chamber.geometry?.firstMaterial?.lightingModel = .constant
         scene.rootNode.addChildNode(chamber)
-        
-        // Add 3D text label above the chamber
-        let textGeometry = SCNText(string: "FUSION CHAMBER", extrusionDepth: 0.05)
-        textGeometry.font = UIFont.systemFont(ofSize: 0.26, weight: .bold)
-        textGeometry.firstMaterial?.diffuse.contents = UIColor.cyan
-        textGeometry.firstMaterial?.isDoubleSided = true
-        
-        let textNode = SCNNode(geometry: textGeometry)
-        // Center text pivot for better alignment
-        let (minBound, maxBound) = textGeometry.boundingBox
-        let textWidth = maxBound.x - minBound.x
-        let textHeight = maxBound.y - minBound.y
-        textNode.pivot = SCNMatrix4MakeTranslation(
-            (minBound.x + textWidth / 2),
-            minBound.y,
-            0
-        )
-        textNode.position = SCNVector3(0, 9.5, 0)
-        textNode.scale = SCNVector3(1, 1, 1)
-        
-        // Billboard constraint so text always faces the camera
-        let billboardConstraint = SCNBillboardConstraint()
-        billboardConstraint.freeAxes = .Y
-        textNode.constraints = [billboardConstraint]
-        
-        scene.rootNode.addChildNode(textNode)
+
+        addChamberLabel()
 
         setupSuperCoils()
-
-        fieldLinesNode = SCNNode()
-        fusionEventsNode = SCNNode()
 
         scene.rootNode.addChildNode(fieldLinesNode)
         scene.rootNode.addChildNode(fusionEventsNode)
 
         buildFieldLines()
-
         createWaveParticle()
     }
 
+    private func addChamberLabel() {
+        let textGeometry = SCNText(
+            string: "FUSION CHAMBER",
+            extrusionDepth: 0.05
+        )
+
+        textGeometry.font = UIFont.systemFont(
+            ofSize: 0.26,
+            weight: .bold
+        )
+
+        textGeometry.firstMaterial?.diffuse.contents = UIColor.cyan
+        textGeometry.firstMaterial?.isDoubleSided = true
+
+        let textNode = SCNNode(geometry: textGeometry)
+
+        let (minimum, maximum) = textGeometry.boundingBox
+        let width = maximum.x - minimum.x
+
+        textNode.pivot = SCNMatrix4MakeTranslation(
+            minimum.x + width / 2.0,
+            minimum.y,
+            0.0
+        )
+
+        textNode.position = SCNVector3(0, 9.5, 0)
+
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .Y
+        textNode.constraints = [billboard]
+
+        scene.rootNode.addChildNode(textNode)
+    }
+
     private func createWaveParticle() {
-        let radius: CGFloat = 0.2
-        let sphere = SCNSphere(radius: radius)
-        sphere.firstMaterial = SCNMaterial()
-        sphere.firstMaterial?.diffuse.contents = UIColor.cyan
-        sphere.firstMaterial?.emission.contents = UIColor.cyan
-        sphere.firstMaterial?.lightingModel = .constant
-        sphere.firstMaterial?.isDoubleSided = true
+        let sphere = SCNSphere(radius: 0.2)
+        let material = SCNMaterial()
+
+        material.diffuse.contents = UIColor.cyan
+        material.emission.contents = UIColor.cyan
+        material.lightingModel = .constant
+        material.isDoubleSided = true
+
+        sphere.firstMaterial = material
 
         let node = SCNNode(geometry: sphere)
-        node.position = SCNVector3(0, 0, 18) // Source position outside the chamber
+        node.position = SCNVector3(0, 0, 18)
+
         scene.rootNode.addChildNode(node)
 
         waveParticleNode = node
@@ -383,27 +377,19 @@ final class FusionResonatorSimulator: ObservableObject {
     }
 
     private func setupSuperCoils() {
-        for i in 0..<12 {
-            let torus = SCNTorus(
-                ringRadius: 9.2,
-                pipeRadius: 0.75
-            )
-
+        for index in 0..<12 {
+            let torus = SCNTorus(ringRadius: 9.2, pipeRadius: 0.75)
             let coil = SCNNode(geometry: torus)
 
             coil.rotation = SCNVector4(
                 0,
                 1,
                 0,
-                2.0 *
-                Double.pi *
-                Double(i) /
-                12.0
+                2.0 * Double.pi * Double(index) / 12.0
             )
 
             if let material = torus.firstMaterial {
-                material.emission.contents =
-                    i % 2 == 0
+                material.emission.contents = index.isMultiple(of: 2)
                     ? UIColor.cyan
                     : UIColor.purple
 
@@ -419,41 +405,77 @@ final class FusionResonatorSimulator: ObservableObject {
 
     private func buildFieldLines() {
         let axes: [SCNVector4] = [
-            SCNVector4(
-                1,
-                0,
-                0,
-                Double.pi / 2
-            ),
-            SCNVector4(
-                0,
-                0,
-                1,
-                Double.pi / 2
-            )
+            SCNVector4(1, 0, 0, Double.pi / 2.0),
+            SCNVector4(0, 0, 1, Double.pi / 2.0)
         ]
 
         for rotation in axes {
-            let line = SCNNode(
-                geometry: SCNCylinder(
-                    radius: 0.045,
-                    height: 18
-                )
-            )
+            let cylinder = SCNCylinder(radius: 0.045, height: 18.0)
+            cylinder.firstMaterial?.emission.contents = UIColor.cyan
 
-            line.geometry?
-                .firstMaterial?
-                .emission.contents =
-                UIColor.cyan
-
+            let line = SCNNode(geometry: cylinder)
             line.rotation = rotation
+
             fieldLinesNode.addChildNode(line)
         }
 
         fieldLinesNode.isHidden = true
     }
 
-    // MARK: Fuel Inventory
+    // MARK: - Reactor Nodes
+
+    func createFusionReactorNodes(count: Int) {
+        removeFusionReactorNodes()
+
+        let positions: [SCNVector3] = [
+            SCNVector3(-4, 0, 0),
+            SCNVector3(4, 0, 0),
+            SCNVector3(0, 4, 0),
+            SCNVector3(0, -4, 0),
+            SCNVector3(-3, 3, 0),
+            SCNVector3(3, 3, 0),
+            SCNVector3(-3, -3, 0),
+            SCNVector3(3, -3, 0)
+        ]
+
+        for index in 0..<min(count, positions.count) {
+            let capsule = SCNCapsule(capRadius: 0.4, height: 1.5)
+            let material = SCNMaterial()
+
+            material.emission.contents = UIColor.systemOrange
+            material.diffuse.contents =
+                UIColor.orange.withAlphaComponent(0.7)
+            material.lightingModel = .physicallyBased
+
+            capsule.materials = [material]
+
+            let node = SCNNode(geometry: capsule)
+            node.position = positions[index]
+            node.name = "FusionReactorNode"
+
+            let pulse = SCNAction.customAction(duration: 1.0) {
+                _, elapsedTime in
+
+                let fraction = elapsedTime / 1.0
+                let intensity = 0.6 + 0.4 * sin(fraction * .pi * 2.0)
+
+                material.emission.contents =
+                    UIColor.orange.withAlphaComponent(CGFloat(intensity))
+            }
+
+            node.runAction(.repeatForever(pulse))
+
+            scene.rootNode.addChildNode(node)
+            fusionReactorNodes.append(node)
+        }
+    }
+
+    private func removeFusionReactorNodes() {
+        fusionReactorNodes.forEach { $0.removeFromParentNode() }
+        fusionReactorNodes.removeAll()
+    }
+
+    // MARK: - Fuel Inventory
 
     private func randomPosition() -> SCNVector3 {
         let radius: Float = 6.0
@@ -466,29 +488,18 @@ final class FusionResonatorSimulator: ObservableObject {
     }
 
     @discardableResult
-    private func spawnHydrogen(
-        at position: SCNVector3
-    ) -> FusionParticle {
+    private func spawnHydrogen(at position: SCNVector3) -> FusionParticle {
+        let sphere = SCNSphere(radius: Species.proton.radius)
+        let node = SCNNode(geometry: sphere)
 
-        let node = SCNNode(
-            geometry: SCNSphere(
-                radius: Species.proton.radius
-            )
-        )
-
-        node.geometry?
-            .firstMaterial?
-            .diffuse.contents =
+        node.geometry?.firstMaterial?.diffuse.contents =
             Species.proton.color
 
-        node.geometry?
-            .firstMaterial?
-            .emission.contents =
+        node.geometry?.firstMaterial?.emission.contents =
             Species.proton.color.withAlphaComponent(0.5)
 
         node.position = position
 
-        // QRTL visual twister.
         let twister = SCNNode(
             geometry: SCNCylinder(
                 radius: 0.05,
@@ -496,86 +507,49 @@ final class FusionResonatorSimulator: ObservableObject {
             )
         )
 
-        twister.geometry?
-            .firstMaterial?
-            .emission.contents =
-            UIColor.cyan
-
-        twister.rotation =
-            SCNVector4(
-                1,
-                1,
-                0,
-                Double.pi / 2
-            )
+        twister.geometry?.firstMaterial?.emission.contents = UIColor.cyan
+        twister.rotation = SCNVector4(1, 1, 0, Double.pi / 2.0)
 
         node.addChildNode(twister)
-
         scene.rootNode.addChildNode(node)
 
-        let particle = FusionParticle(
-            node: node,
-            species: .proton
-        )
-
+        let particle = FusionParticle(node: node, species: .proton)
         particles.append(particle)
 
         return particle
     }
 
-    private func spawnHelium4(
-        at position: SCNVector3
-    ) {
-        let node = SCNNode(
-            geometry: SCNSphere(
-                radius: Species.helium4.radius
-            )
-        )
+    private func spawnHelium4(at position: SCNVector3) {
+        let sphere = SCNSphere(radius: Species.helium4.radius)
+        let node = SCNNode(geometry: sphere)
 
         node.position = position
 
-        node.geometry?
-            .firstMaterial?
-            .diffuse.contents =
+        node.geometry?.firstMaterial?.diffuse.contents =
             Species.helium4.color
 
-        node.geometry?
-            .firstMaterial?
-            .emission.contents =
+        node.geometry?.firstMaterial?.emission.contents =
             Species.helium4.color
 
         scene.rootNode.addChildNode(node)
         heliumNodes.append(node)
 
-        // Product remains visible briefly as the He-4 product.
         let pulse = SCNAction.sequence([
-            SCNAction.scale(
-                to: 1.35,
-                duration: 0.25
-            ),
-            SCNAction.scale(
-                to: 1.0,
-                duration: 0.25
-            )
+            .scale(to: 1.35, duration: 0.25),
+            .scale(to: 1.0, duration: 0.25)
         ])
 
         node.runAction(pulse)
     }
 
     private func resetHydrogen() {
-        particles.forEach {
-            $0.node.removeFromParentNode()
-        }
-
+        particles.forEach { $0.node.removeFromParentNode() }
         particles.removeAll()
 
-        heliumNodes.forEach {
-            $0.removeFromParentNode()
-        }
-
+        heliumNodes.forEach { $0.removeFromParentNode() }
         heliumNodes.removeAll()
 
-        fusionEventsNode?.childNodes.forEach {
+        fusionEventsNode.childNodes.forEach {
             $0.removeFromParentNode()
         }
 
@@ -587,9 +561,9 @@ final class FusionResonatorSimulator: ObservableObject {
         coupledCount = 0
         heliumCount = 0
         totalReactions = 0
-        reactionRateHz = 0
-        fusionProbability = 0
-        frameFusionEnergyMeV = 0
+        reactionRateHz = 0.0
+        fusionProbability = 0.0
+        frameFusionEnergyMeV = 0.0
         frameEvents = 0
 
         if waveParticleNode == nil {
@@ -603,27 +577,19 @@ final class FusionResonatorSimulator: ObservableObject {
             particleCount
         )
 
-        let currentHydrogen = particles.count
-
-        if desired > currentHydrogen {
-            for _ in 0..<(desired - currentHydrogen) {
+        if desired > particles.count {
+            for _ in 0..<(desired - particles.count) {
                 spawnHydrogen(at: randomPosition())
             }
-        } else if desired < currentHydrogen {
-            var removeCount =
-                currentHydrogen - desired
+        } else if desired < particles.count {
+            var numberToRemove = particles.count - desired
+            var index = particles.count - 1
 
-            var index =
-                particles.count - 1
-
-            while removeCount > 0 && index >= 0 {
+            while numberToRemove > 0 && index >= 0 {
                 if !particles[index].coupled {
-                    particles[index]
-                        .node
-                        .removeFromParentNode()
-
+                    particles[index].node.removeFromParentNode()
                     particles.remove(at: index)
-                    removeCount -= 1
+                    numberToRemove -= 1
                 }
 
                 index -= 1
@@ -634,12 +600,9 @@ final class FusionResonatorSimulator: ObservableObject {
     }
 
     private func replenishHydrogen() {
-        let deficit =
-            particleCount - particles.count
+        let deficit = particleCount - particles.count
 
-        guard deficit > 0 else {
-            return
-        }
+        guard deficit > 0 else { return }
 
         for _ in 0..<min(deficit, 2) {
             spawnHydrogen(at: randomPosition())
@@ -648,304 +611,271 @@ final class FusionResonatorSimulator: ObservableObject {
         hydrogenCount = particles.count
     }
 
-    // MARK: Simulation Control
-
-    func startSimulation() {
-        guard !isRunning else {
-            return
-        }
-
-        isRunning = true
-        
-        createFusionReactorNodes(count: 4)
-
-        timer = Timer.scheduledTimer(
-            withTimeInterval: 1.0 / 60.0,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.update()
-            }
-        }
-    }
-
-    func stopSimulation() {
-        timer?.invalidate()
-        timer = nil
-        isRunning = false
-        
-        removeFusionReactorNodes()
-    }
-
-    func reset() {
-        stopSimulation()
-
-        detuningPPM = 30.0
-        magneticField = 8.5
-        particleCount = max(
-            FusionConstants.protonsPerFusion,
-            particleCount
-        )
-
-        coherence = 0
-        phaseErrorRad = 0
-        latticeOrder = 0
-        latticeProbability = 0
-
-        coupledCount = 0
-        hydrogenCount = 0
-
-        heliumCount = 0
-        totalReactions = 0
-        reactionRateHz = 0
-        fusionProbability = 0
-
-        inputPowerMW = 0
-        fusionPowerMW = 0
-        electricalOutputMW = 0
-        netPowerMW = 0
-        cumulativeNetMWh = 0
-        qFactor = 0
-        outputCurrentA = 0
-
-        fusionPowerFilteredMW = 0
-        frameFusionEnergyMeV = 0
-        frameEvents = 0
-        phase = 0
-
-        haloLight.light?.intensity = 0
-        fieldLinesNode.isHidden = true
-        
-        removeFusionReactorNodes()
-
-        resetHydrogen()
-    }
-
-    func seekLock() {
-        detuningPPM = 0
-    }
-
-    // MARK: Main Update
+    // MARK: - Main Update
 
     private func update() {
-        let dt = 1.0 / 60.0
+        let dt = simulationTimeStep
 
-        // Wave particle animation
-        if waveParticleNode == nil {
-            createWaveParticle()
-        }
-        waveParticlePhase += dt * targetFrequencyHz / 1e15 * 2.0 * Double.pi
-        let t = 0.5 * (1.0 + sin(waveParticlePhase))
-        let sourceZ: Float = 18.0
-        let targetZ: Float = 0.0
-        let posZ = sourceZ * Float(1.0 - t) + targetZ * Float(t)
-        waveParticleNode?.position = SCNVector3(0, 0, posZ)
-
-        // Visual representation only.
-        // It does not attempt to render the actual 1e15 Hz oscillation.
-        phase += 0.05
-
-        for (index, coil) in superCoils.enumerated() {
-            coil.eulerAngles.y =
-                Float(
-                    phase +
-                    Double(index) * 0.3
-                )
-        }
-
-        // ---------------------------------------------------------
-        // QRTL PIPELINE
-        // ---------------------------------------------------------
-        //
-        // 1. Resonance
-        // 2. Coherence
-        // 3. Lattice probability/order
-        // 4. Proton coupling
-        // 5. Four-proton fusion
-        // 6. H -> He-4 product
-        // 7. Energy extraction
-        //
-        // No alternate reaction catalog exists.
-        // ---------------------------------------------------------
+        updateWaveParticle(dt: dt)
+        updateCoilAnimation()
 
         updateQRTLResonance()
-
+        updateEnergyShell(dt: dt)
         stepHydrogenLattice()
-
         runHydrogenToHeliumFusion()
-
         replenishHydrogen()
-
         updatePower(dt: dt)
-
         updateVisualFeedback()
     }
 
-    // MARK: Stage 1 — QRTL Resonance
+    private func updateWaveParticle(dt: Double) {
+        if waveParticleNode == nil {
+            createWaveParticle()
+        }
+
+        // Visual animation only; this does not render 1e15 Hz directly.
+        waveParticlePhase +=
+            dt * targetFrequencyHz / 1.0e15 * 2.0 * Double.pi
+
+        let interpolation = 0.5 * (1.0 + sin(waveParticlePhase))
+        let sourceZ: Float = 18.0
+        let targetZ: Float = 0.0
+
+        let positionZ =
+            sourceZ * Float(1.0 - interpolation)
+            + targetZ * Float(interpolation)
+
+        waveParticleNode?.position = SCNVector3(0, 0, positionZ)
+    }
+
+    private func updateCoilAnimation() {
+        phase += 0.05
+
+        for (index, coil) in superCoils.enumerated() {
+            coil.eulerAngles.y = Float(phase + Double(index) * 0.3)
+        }
+    }
+
+    // MARK: - Stage 1: Resonance
 
     private func updateQRTLResonance() {
         if autoLockEnabled {
             detuningPPM *= 0.97
 
             if abs(detuningPPM) < 0.01 {
-                detuningPPM = 0
+                detuningPPM = 0.0
             }
         }
 
-        phaseErrorRad =
-            QRTLModel.phaseError(
-                detuningPPM: detuningPPM
-            )
+        phaseErrorRad = QRTLModel.phaseError(
+            detuningPPM: detuningPPM
+        )
 
-        coherence =
-            QRTLModel.coherence(
-                detuningPPM: detuningPPM,
-                magneticField: magneticField
-            )
+        coherence = QRTLModel.coherence(
+            detuningPPM: detuningPPM,
+            magneticField: magneticField
+        )
 
-        latticeProbability =
-            QRTLModel.latticeProbability(
-                coherence: coherence
-            )
+        latticeProbability = QRTLModel.latticeProbability(
+            coherence: coherence
+        )
 
-        latticeOrder =
-            QRTLModel.latticeOrder(
-                coherence: coherence,
-                magneticField: magneticField
-            )
+        latticeOrder = QRTLModel.latticeOrder(
+            coherence: coherence,
+            magneticField: magneticField
+        )
 
-        fusionProbability =
-            QRTLModel.fusionProbability(
-                coherence: coherence,
-                latticeOrder: latticeOrder,
-                latticeProbability: latticeProbability,
-                yieldScale: reactionYieldScale
-            )
+        fusionProbability = QRTLModel.fusionProbability(
+            coherence: coherence,
+            latticeOrder: latticeOrder,
+            latticeProbability: latticeProbability,
+            yieldScale: reactionYieldScale
+        )
     }
 
-    // MARK: Stage 2 — Proton QRTL Lattice Coupling
+    // MARK: - Shell Energy Model
 
-    private func vlen(_ v: SCNVector3) -> Float {
+    private func updateEnergyShell(dt: Double) {
+        guard dt.isFinite, dt > 0.0 else { return }
+
+        guard coherence > 0.0 else {
+            shellPhase = "idle"
+            shellResonanceEnvelope = 0.0
+            return
+        }
+
+        let detuningRatio =
+            abs(appliedFrequencyHz - shellNaturalFrequencyHz)
+            / max(shellNaturalFrequencyHz, 1.0)
+
+        let bandwidth = max(
+            30.0e-6,
+            1.0 / shellQualityFactor
+        )
+
+        shellResonanceEnvelope = min(
+            1.0,
+            max(
+                0.0,
+                exp(-0.5 * pow(detuningRatio / bandwidth, 2.0))
+                    * coherence
+            )
+        )
+
+        let cryoPowerMW = 0.6 + magneticField * 0.12
+        let rfPowerMW = 1.2 * (
+            1.0 + 0.01 * min(abs(detuningPPM), 50.0)
+        )
+        let controlPowerMW = 0.3
+
+        let drivePowerW =
+            (cryoPowerMW + rfPowerMW + controlPowerMW)
+            * 1.0e6
+            * shellDriveFraction
+            * shellResonanceEnvelope
+
+        let canAccumulate =
+            shellResonanceEnvelope > 0.05
+                && shellStoredEnergyJ < shellMaxStoredEnergyJ
+
+        if canAccumulate {
+            shellStoredEnergyJ = min(
+                shellMaxStoredEnergyJ,
+                shellStoredEnergyJ + max(0.0, drivePowerW * dt)
+            )
+
+            shellFormationTime += dt
+        }
+
+        updateShellDisplacement()
+
+        guard shellFormationTime >= shellFormationSeconds else {
+            shellPhase = "forming"
+            return
+        }
+
+        guard shellResonanceEnvelope > 0.80 else {
+            shellPhase = "forming"
+            return
+        }
+
+        // Only discharge after a meaningful reservoir has accumulated.
+        guard !shellEnergyReleasedThisCycle else {
+            shellPhase = "recharging"
+            return
+        }
+
+        guard shellStoredEnergyJ >= shellMaxStoredEnergyJ * 0.95 else {
+            shellPhase = "compressed"
+            return
+        }
+
+        let releaseJ = shellStoredEnergyJ * shellReleaseFraction
+
+        shellStoredEnergyJ -= releaseJ
+        shellEnergyReleasedJ += releaseJ
+        latticeEnergyInputJ += releaseJ
+
+        shellEnergyReleasedThisCycle = true
+        shellPhase = "released"
+
+        updateShellDisplacement()
+
+        // Permit a new discharge only after the reservoir has recharged.
+        if shellStoredEnergyJ <= shellMaxStoredEnergyJ * 0.25 {
+            shellEnergyReleasedThisCycle = false
+            shellFormationTime = shellFormationSeconds
+        }
+    }
+
+    private func updateShellDisplacement() {
+        shellDisplacementM = sqrt(
+            max(
+                0.0,
+                2.0 * shellStoredEnergyJ
+                    / shellRestoringConstantNPerM
+            )
+        )
+    }
+
+    // MARK: - Stage 2: Lattice Coupling
+
+    private func vectorLength(_ vector: SCNVector3) -> Float {
         sqrtf(
-            v.x * v.x +
-            v.y * v.y +
-            v.z * v.z
+            vector.x * vector.x
+                + vector.y * vector.y
+                + vector.z * vector.z
         )
     }
 
     private func stepHydrogenLattice() {
-        let jitter =
-            Float(
-                max(
-                    0.0,
-                    1.0 - coherence
-                )
-            ) * 0.04
-
-        let cosA = cosf(0.03)
-        let sinA = sinf(0.03)
+        let jitter = Float(max(0.0, 1.0 - coherence)) * 0.04
+        let cosine = cosf(0.03)
+        let sine = sinf(0.03)
 
         var coupled = 0
 
         for particle in particles {
-            var position =
-                particle.node.position
+            var position = particle.node.position
 
             if particle.coupled {
-                // Coherent QRTL lattice contraction.
                 position.x -= position.x * 0.03
                 position.y -= position.y * 0.03
                 position.z -= position.z * 0.03
 
-                let x =
-                    position.x * cosA -
-                    position.z * sinA
-
-                let z =
-                    position.x * sinA +
-                    position.z * cosA
+                let x = position.x * cosine - position.z * sine
+                let z = position.x * sine + position.z * cosine
 
                 position.x = x
                 position.z = z
 
-                let localJitter =
-                    jitter * 0.25
+                let localJitter = jitter * 0.25
 
-                position.x +=
-                    Float.random(
-                        in: -localJitter...localJitter
-                    )
+                position.x += Float.random(
+                    in: -localJitter...localJitter
+                )
+                position.y += Float.random(
+                    in: -localJitter...localJitter
+                )
+                position.z += Float.random(
+                    in: -localJitter...localJitter
+                )
 
-                position.y +=
-                    Float.random(
-                        in: -localJitter...localJitter
-                    )
-
-                position.z +=
-                    Float.random(
-                        in: -localJitter...localJitter
-                    )
-
-                particle.node.position =
-                    position
+                particle.node.position = position
 
                 if coherence < 0.60 {
                     particle.coupled = false
+                    particle.node.scale = SCNVector3(1, 1, 1)
 
-                    particle.node.scale =
-                        SCNVector3(1, 1, 1)
-
-                    particle.node.geometry?
-                        .firstMaterial?
+                    particle.node.geometry?.firstMaterial?
                         .emission.contents =
-                        Species.proton.color
-                        .withAlphaComponent(0.5)
+                        Species.proton.color.withAlphaComponent(0.5)
                 } else {
                     coupled += 1
                 }
-
             } else {
-                // Incoherent hydrogen drifts toward the resonator core.
                 let pull: Float = 0.0018
 
                 position.x +=
-                    -position.x * pull +
-                    Float.random(
-                        in: -jitter...jitter
-                    )
+                    -position.x * pull
+                    + Float.random(in: -jitter...jitter)
 
                 position.y +=
-                    -position.y * pull +
-                    Float.random(
-                        in: -jitter...jitter
-                    )
+                    -position.y * pull
+                    + Float.random(in: -jitter...jitter)
 
                 position.z +=
-                    -position.z * pull +
-                    Float.random(
-                        in: -jitter...jitter
-                    )
+                    -position.z * pull
+                    + Float.random(in: -jitter...jitter)
 
-                particle.node.position =
-                    position
+                particle.node.position = position
 
-                // Coupling requires both proximity and QRTL coherence.
-                if vlen(position) < 2.8 &&
-                    coherence > 0.75 {
-
+                if vectorLength(position) < 2.8 && coherence > 0.75 {
                     particle.coupled = true
+                    particle.node.scale = SCNVector3(0.7, 0.7, 0.7)
 
-                    particle.node.scale =
-                        SCNVector3(
-                            0.7,
-                            0.7,
-                            0.7
-                        )
-
-                    particle.node.geometry?
-                        .firstMaterial?
-                        .emission.contents =
-                        Species.proton.color
+                    particle.node.geometry?.firstMaterial?
+                        .emission.contents = Species.proton.color
 
                     coupled += 1
                 }
@@ -956,73 +886,46 @@ final class FusionResonatorSimulator: ObservableObject {
         hydrogenCount = particles.count
     }
 
-    // MARK: Stage 3 — H → He-4 Fusion
+    // MARK: - Stage 3: H → He-4 Model
 
     private func runHydrogenToHeliumFusion() {
-
         guard coherence > 0.85,
               latticeOrder > 0.60,
-              latticeProbability > 0.90
+              latticeProbability > 0.90,
+              shellResonanceEnvelope > 0.80,
+              shellStoredEnergyJ > 0.0
         else {
             return
         }
 
-        let coupled =
-            particles.filter {
-                $0.coupled
-            }
+        let coupledParticles = particles.filter(\.coupled)
 
-        guard coupled.count >=
-                FusionConstants.protonsPerFusion
-        else {
+        guard coupledParticles.count >= FusionConstants.protonsPerFusion else {
             return
         }
 
-        var consumed =
-            Set<ObjectIdentifier>()
-
+        var consumed = Set<ObjectIdentifier>()
         var eventsThisFrame = 0
 
-        // One modeled fusion event consumes exactly four protons.
-        while eventsThisFrame <
-                maxEventsPerFrame {
+        while eventsThisFrame < maxEventsPerFrame {
+            let available = coupledParticles.filter {
+                !consumed.contains(ObjectIdentifier($0))
+            }
 
-            let available =
-                coupled.filter {
-                    !consumed.contains(
-                        ObjectIdentifier($0)
-                    )
-                }
-
-            guard available.count >=
-                    FusionConstants.protonsPerFusion
+            guard available.count >= FusionConstants.protonsPerFusion,
+                  let group = findProtonFusionGroup(in: available)
             else {
                 break
             }
 
-            guard
-                let group =
-                    findProtonFusionGroup(
-                        in: available
-                    )
-            else {
-                break
-            }
-
-            let roll =
-                Double.random(in: 0..<1)
-
-            guard roll < fusionProbability
-            else {
+            guard Double.random(in: 0..<1) < fusionProbability else {
                 break
             }
 
             fuseFourProtons(group)
 
             for proton in group {
-                consumed.insert(
-                    ObjectIdentifier(proton)
-                )
+                consumed.insert(ObjectIdentifier(proton))
             }
 
             eventsThisFrame += 1
@@ -1032,44 +935,31 @@ final class FusionResonatorSimulator: ObservableObject {
     private func findProtonFusionGroup(
         in protons: [FusionParticle]
     ) -> [FusionParticle]? {
-
-        guard protons.count >= 4 else {
+        guard protons.count >= FusionConstants.protonsPerFusion else {
             return nil
         }
 
-        // Find a compact group of four synchronized protons.
-        for i in 0..<(protons.count - 3) {
-            let a = protons[i]
+        for index in 0..<(protons.count - 3) {
+            let anchor = protons[index]
+            var group = [anchor]
 
-            var group = [a]
-
-            for j in (i + 1)..<protons.count {
-                let candidate = protons[j]
+            for candidateIndex in (index + 1)..<protons.count {
+                let candidate = protons[candidateIndex]
 
                 let dx =
-                    a.node.position.x -
-                    candidate.node.position.x
-
+                    anchor.node.position.x - candidate.node.position.x
                 let dy =
-                    a.node.position.y -
-                    candidate.node.position.y
-
+                    anchor.node.position.y - candidate.node.position.y
                 let dz =
-                    a.node.position.z -
-                    candidate.node.position.z
+                    anchor.node.position.z - candidate.node.position.z
 
-                let distance =
-                    sqrtf(
-                        dx * dx +
-                        dy * dy +
-                        dz * dz
-                    )
+                let distance = sqrtf(dx * dx + dy * dy + dz * dz)
 
                 if distance <= pairingRadius {
                     group.append(candidate)
                 }
 
-                if group.count == 4 {
+                if group.count == FusionConstants.protonsPerFusion {
                     return group
                 }
             }
@@ -1078,254 +968,168 @@ final class FusionResonatorSimulator: ObservableObject {
         return nil
     }
 
-    private func fuseFourProtons(
-        _ protons: [FusionParticle]
-    ) {
-
-        guard protons.count == 4 else {
+    private func fuseFourProtons(_ protons: [FusionParticle]) {
+        guard protons.count == FusionConstants.protonsPerFusion else {
             return
         }
 
         let midpoint = SCNVector3(
-            protons.reduce(0.0) {
+            Float(protons.reduce(0.0) {
                 $0 + Double($1.node.position.x)
-            } / 4.0,
+            } / Double(protons.count)),
 
-            protons.reduce(0.0) {
+            Float(protons.reduce(0.0) {
                 $0 + Double($1.node.position.y)
-            } / 4.0,
+            } / Double(protons.count)),
 
-            protons.reduce(0.0) {
+            Float(protons.reduce(0.0) {
                 $0 + Double($1.node.position.z)
-            } / 4.0
+            } / Double(protons.count))
         )
 
-        let event =
-            FusionEvent.hydrogenToHelium4
+        let event = FusionEvent.hydrogenToHelium4
 
         for proton in protons {
             proton.node.removeFromParentNode()
         }
 
         particles.removeAll { particle in
-            protons.contains {
-                $0 === particle
-            }
+            protons.contains { $0 === particle }
         }
 
-        // The only nuclear product in this simulation is He-4.
         spawnHelium4(at: midpoint)
 
         heliumCount += event.heliumProduced
-
         totalReactions += 1
-
         frameEvents += 1
-        frameFusionEnergyMeV +=
-            event.energyMeV
+        frameFusionEnergyMeV += event.energyMeV
 
         spawnFusionFlash(
+            at: midpoint,
             energyMeV: event.energyMeV
         )
     }
 
-    // MARK: Fusion Flash
+    // MARK: - Fusion Flash
 
     private func spawnFusionFlash(
+        at position: SCNVector3,
         energyMeV: Double
     ) {
-        let radius =
-            CGFloat(
-                0.25 +
-                0.02 * energyMeV
-            )
+        let radius = CGFloat(0.25 + 0.02 * energyMeV)
 
         let flash = SCNNode(
-            geometry: SCNSphere(
-                radius: radius
-            )
+            geometry: SCNSphere(radius: radius)
         )
 
-        flash.geometry?
-            .firstMaterial?
-            .emission.contents =
-            UIColor.yellow
+        flash.geometry?.firstMaterial?.emission.contents = UIColor.yellow
+        flash.geometry?.firstMaterial?.diffuse.contents = UIColor.yellow
 
-        flash.geometry?
-            .firstMaterial?
-            .diffuse.contents =
-            UIColor.yellow
-
-        flash.position =
-            SCNVector3(0, 0, 0)
+        // This was previously hard-coded to (0, 0, 0), not the reaction.
+        flash.position = position
 
         fusionEventsNode.addChildNode(flash)
 
-        let grow =
-            SCNAction.scale(
-                to: 4.0,
-                duration: 0.4
-            )
-
-        let fade =
-            SCNAction.fadeOut(
-                duration: 0.4
-            )
+        let grow = SCNAction.scale(to: 4.0, duration: 0.4)
+        let fade = SCNAction.fadeOut(duration: 0.4)
 
         flash.runAction(
-            SCNAction.sequence([
-                SCNAction.group([
-                    grow,
-                    fade
-                ]),
-                SCNAction.removeFromParentNode()
+            .sequence([
+                .group([grow, fade]),
+                .removeFromParentNode()
             ])
         )
     }
 
-    // MARK: Stage 4 — Energy Accounting
+    // MARK: - Stage 4: Power Accounting
 
     private func updatePower(dt: Double) {
+        let cryoPowerMW = 0.6 + magneticField * 0.12
 
-        // Conceptual resonator input.
-        let cryoPowerMW =
-            0.6 +
-            magneticField * 0.12
-
-        let rfPowerMW =
-            1.2 *
-            (
-                1.0 +
-                0.01 *
-                min(
-                    abs(detuningPPM),
-                    50.0
-                )
-            )
+        let rfPowerMW = 1.2 * (
+            1.0 + 0.01 * min(abs(detuningPPM), 50.0)
+        )
 
         let controlPowerMW = 0.3
 
         inputPowerMW =
-            cryoPowerMW +
-            rfPowerMW +
-            controlPowerMW
+            cryoPowerMW
+            + rfPowerMW
+            + controlPowerMW
 
-        // Energy comes only from modeled fusion events.
-        let fusionMW =
-            frameFusionEnergyMeV *
-            FusionConstants.mevToJoule *
-            macroParticleWeight /
-            dt /
-            1e6
+        let instantaneousFusionMW =
+            frameFusionEnergyMeV
+            * FusionConstants.mevToJoule
+            * macroParticleWeight
+            / dt
+            / 1.0e6
 
         let alpha = 0.03
 
-        fusionPowerFilteredMW +=
-            alpha *
-            (
-                fusionMW -
-                fusionPowerFilteredMW
-            )
+        fusionPowerFilteredMW += alpha * (
+            instantaneousFusionMW - fusionPowerFilteredMW
+        )
 
-        reactionRateHz +=
-            alpha *
-            (
-                Double(frameEvents) /
-                dt -
-                reactionRateHz
-            )
+        reactionRateHz += alpha * (
+            Double(frameEvents) / dt - reactionRateHz
+        )
 
-        fusionPowerMW =
-            fusionPowerFilteredMW
-
+        fusionPowerMW = fusionPowerFilteredMW
         electricalOutputMW =
-            fusionPowerMW *
-            directConversionEfficiency
+            fusionPowerMW * directConversionEfficiency
 
-        netPowerMW =
-            electricalOutputMW -
-            inputPowerMW
+        netPowerMW = electricalOutputMW - inputPowerMW
 
         cumulativeNetMWh +=
-            max(0.0, netPowerMW) *
-            dt /
-            3600.0
+            max(0.0, netPowerMW) * dt / 3600.0
 
-        qFactor =
-            inputPowerMW > 0
+        qFactor = inputPowerMW > 0.0
             ? fusionPowerMW / inputPowerMW
             : 0.0
 
         energyPerReactionMeV =
             FusionConstants.effectiveFusionEnergyMeV
 
-        frameFusionEnergyMeV = 0
+        frameFusionEnergyMeV = 0.0
         frameEvents = 0
 
         updateOutputCurrent()
     }
 
     private func updateOutputCurrent() {
-        let voltageV =
-            max(
-                1.0,
-                extractionVoltageKV * 1000.0
-            )
+        let voltageV = max(1.0, extractionVoltageKV * 1000.0)
 
         outputCurrentA =
-            electricalOutputMW *
-            1_000_000.0 /
-            voltageV
+            electricalOutputMW * 1.0e6 / voltageV
     }
 
-    // MARK: Visual Feedback
+    // MARK: - Visual Feedback
 
     private func updateVisualFeedback() {
+        fieldLinesNode.isHidden = coherence <= 0.65
 
-        fieldLinesNode.isHidden =
-            coherence <= 0.65
-
-        let glow =
-            CGFloat(
-                min(
-                    0.9,
-                    max(
-                        0.0,
-                        qFactor / 5.0
-                    )
-                )
+        let glow = CGFloat(
+            min(
+                0.9,
+                max(0.0, qFactor / 5.0)
             )
+        )
 
         for coil in superCoils {
-            coil.geometry?
-                .firstMaterial?
-                .emission.contents =
+            coil.geometry?.firstMaterial?.emission.contents =
                 coherence > 0.85
-                ? UIColor.green.withAlphaComponent(0.8)
-                : UIColor.cyan.withAlphaComponent(0.6)
+                    ? UIColor.green.withAlphaComponent(0.8)
+                    : UIColor.cyan.withAlphaComponent(0.6)
         }
 
-        haloLight.light?.intensity =
-            CGFloat(
-                coherence * 1200
-            )
+        haloLight.light?.intensity = CGFloat(coherence * 1200.0)
 
-        haloLight.light?.color =
-            isFusing
+        haloLight.light?.color = isFusing
             ? UIColor.yellow
-            : (
-                isLocked
-                ? UIColor.green
-                : UIColor.orange
-            )
+            : (isLocked ? UIColor.green : UIColor.orange)
 
         for helium in heliumNodes {
-            helium.opacity =
-                max(
-                    0.45,
-                    Double(glow) + 0.45
-                )
+            helium.opacity = max(0.45, Double(glow) + 0.45)
         }
     }
 }
-

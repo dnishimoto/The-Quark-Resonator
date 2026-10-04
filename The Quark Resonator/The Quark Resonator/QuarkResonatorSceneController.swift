@@ -1,3 +1,4 @@
+
 //
 //  File.swift
 //  The Quark Resonator
@@ -6,7 +7,6 @@
 //
 
 import Foundation
-
 import SwiftUI
 import SceneKit
 import Combine
@@ -21,20 +21,15 @@ final class QuarkResonatorSceneController: ObservableObject {
     // ========================================================
 
     private let equipmentRoot = SCNNode()
-
     private let chamberNode = SCNNode()
     private let frameNode = SCNNode()
-
     private let driverNode = SCNNode()
     private let actuatorNode = SCNNode()
-
     private let resonatorAssemblyNode = SCNNode()
     private let resonatorNode = SCNNode()
-
     private let sensorNode = SCNNode()
     private let couplingNode = SCNNode()
     private let outputNode = SCNNode()
-
     private let fieldNode = SCNNode()
     private let carrierNode = SCNNode()
 
@@ -51,7 +46,6 @@ final class QuarkResonatorSceneController: ObservableObject {
     private var driverCoils: [SCNNode] = []
     private var actuatorPlates: [SCNNode] = []
     private var supportNodes: [SCNNode] = []
-
     private var carrierParticles: [SCNNode] = []
     private var outputParticles: [SCNNode] = []
 
@@ -68,8 +62,31 @@ final class QuarkResonatorSceneController: ObservableObject {
     private var phase: Double = 0
     private var phaseError: Double = 0
     private var qrtlEnergyJ: Double = 0
-
     private var running = false
+
+    // ========================================================
+    // MARK: BBO → Fusion Geometry
+    // ========================================================
+
+    /*
+     BBO stage origin:
+         X = 7.6
+
+     BBO UV output:
+         local center X = 2.6
+         port half-length = 0.2
+
+     UV output end:
+         2.6 + 0.2 = 2.8
+
+     Fusion chamber:
+         7.6 + 2.8 = 10.4
+    */
+
+    private let bboStageOriginX: Float = 7.6
+
+    private let bboUVPortEndLocalX: Float =
+        2.6 + 0.2
 
     // ========================================================
     // MARK: Initialization
@@ -84,15 +101,14 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         buildDriver()
         buildActuator()
-
         buildMicroResonator()
         buildSensor()
-
         buildCouplingStage()
         buildQRTLOutput()
 
         buildEnergyPath()
         buildFrequencyReadout()
+
         buildBBOStage()
         buildFusionChamberStage()
 
@@ -223,7 +239,10 @@ final class QuarkResonatorSceneController: ObservableObject {
                 )
             )
 
+        // ----------------------------------------------------
         // Bottom rail
+        // ----------------------------------------------------
+
         let bottom =
             SCNBox(
                 width: 12.5,
@@ -251,13 +270,35 @@ final class QuarkResonatorSceneController: ObservableObject {
             bottomNode
         )
 
+        // ----------------------------------------------------
         // Vertical supports
+        // ----------------------------------------------------
+
         let supportPositions: [SCNVector3] = [
 
-            SCNVector3(-5.5, 0, -2.1),
-            SCNVector3(-5.5, 0,  2.1),
-            SCNVector3( 5.5, 0, -2.1),
-            SCNVector3( 5.5, 0,  2.1)
+            SCNVector3(
+                -5.5,
+                0,
+                -2.1
+            ),
+
+            SCNVector3(
+                -5.5,
+                0,
+                2.1
+            ),
+
+            SCNVector3(
+                5.5,
+                0,
+                -2.1
+            ),
+
+            SCNVector3(
+                5.5,
+                0,
+                2.1
+            )
         ]
 
         for position in supportPositions {
@@ -363,7 +404,10 @@ final class QuarkResonatorSceneController: ObservableObject {
 
             coil.position =
                 SCNVector3(
-                    Float(-0.6 + Double(index) * 0.24),
+                    Float(
+                        -0.6 +
+                        Double(index) * 0.24
+                    ),
                     0,
                     0
                 )
@@ -380,14 +424,18 @@ final class QuarkResonatorSceneController: ObservableObject {
             )
         }
 
-        // Driver label plate
+        // ----------------------------------------------------
+        // Driver label
+        // ----------------------------------------------------
+
         addLabel(
             text: "DRIVER",
-            position: SCNVector3(
-                -4.45,
-                1.45,
-                0
-            ),
+            position:
+                SCNVector3(
+                    -4.45,
+                    1.45,
+                    0
+                ),
             color: .systemBlue,
             parent: equipmentRoot
         )
@@ -452,11 +500,12 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         addLabel(
             text: "ACTUATOR / TRANSDUCER",
-            position: SCNVector3(
-                -2.65,
-                1.55,
-                0
-            ),
+            position:
+                SCNVector3(
+                    -2.65,
+                    1.55,
+                    0
+                ),
             color: .systemCyan,
             parent: equipmentRoot
         )
@@ -617,11 +666,12 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         addLabel(
             text: "MICRO-RESONATOR",
-            position: SCNVector3(
-                0,
-                1.85,
-                0
-            ),
+            position:
+                SCNVector3(
+                    0,
+                    1.85,
+                    0
+                ),
             color: .systemPurple,
             parent: equipmentRoot
         )
@@ -697,11 +747,12 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         addLabel(
             text: "PHASE / FREQUENCY SENSOR",
-            position: SCNVector3(
-                0,
-                2.75,
-                0
-            ),
+            position:
+                SCNVector3(
+                    0,
+                    2.75,
+                    0
+                ),
             color: .systemGreen,
             parent: equipmentRoot
         )
@@ -752,7 +803,10 @@ final class QuarkResonatorSceneController: ObservableObject {
             housingNode
         )
 
+        // ----------------------------------------------------
         // Coupling rings
+        // ----------------------------------------------------
+
         for index in 0..<4 {
 
             let ring =
@@ -778,7 +832,10 @@ final class QuarkResonatorSceneController: ObservableObject {
             node.position =
                 SCNVector3(
                     0,
-                    Float(-0.65 + Double(index) * 0.43),
+                    Float(
+                        -0.65 +
+                        Double(index) * 0.43
+                    ),
                     0
                 )
 
@@ -792,11 +849,12 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         addLabel(
             text: "QRTL COUPLING STAGE",
-            position: SCNVector3(
-                2.35,
-                1.45,
-                0
-            ),
+            position:
+                SCNVector3(
+                    2.35,
+                    1.45,
+                    0
+                ),
             color: .systemPurple,
             parent: equipmentRoot
         )
@@ -876,11 +934,12 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         addLabel(
             text: "QRTL OUTPUT",
-            position: SCNVector3(
-                4.25,
-                1.45,
-                0
-            ),
+            position:
+                SCNVector3(
+                    4.25,
+                    1.45,
+                    0
+                ),
             color: .systemOrange,
             parent: equipmentRoot
         )
@@ -892,13 +951,12 @@ final class QuarkResonatorSceneController: ObservableObject {
 
     private func buildEnergyPath() {
 
-        let positions: [Float] =
-            [
-                -3.7,
-                -1.9,
-                 1.2,
-                 3.3
-            ]
+        let positions: [Float] = [
+            -3.7,
+            -1.9,
+            1.2,
+            3.3
+        ]
 
         for index in 0..<positions.count {
 
@@ -999,7 +1057,7 @@ final class QuarkResonatorSceneController: ObservableObject {
 
         bboStage.position =
             SCNVector3(
-                7.6,
+                bboStageOriginX,
                 0,
                 0
             )
@@ -1010,21 +1068,34 @@ final class QuarkResonatorSceneController: ObservableObject {
     }
 
     // ========================================================
-    // MARK: Fusion Chamber Stage (end of the UV output)
+    // MARK: Fusion Chamber Stage
     // ========================================================
 
-    /// BBO stage origin X.
-    private let bboStageOriginX: Float = 7.6
+    /*
+     The fusion chamber is placed at the physical end of
+     the BBO UV output.
 
-    /// The BBO "UV OUT" port is a 0.4 long cylinder centred at local x = 2.6,
-    /// so its open end is at local x = 2.8.
-    private let bboUVPortEndLocalX: Float = 2.6 + 0.2
+     BBO origin:
+         X = 7.6
+
+     UV port:
+         local center X = 2.6
+         half-length = 0.2
+
+     UV exit:
+         X = 2.8 local to BBO
+
+     Fusion chamber:
+         X = 7.6 + 2.8
+         X = 10.4
+    */
 
     private func buildFusionChamberStage() {
 
         fusionChamber.position =
             SCNVector3(
-                bboStageOriginX + bboUVPortEndLocalX,
+                bboStageOriginX +
+                    bboUVPortEndLocalX,
                 0,
                 0
             )
@@ -1052,8 +1123,14 @@ final class QuarkResonatorSceneController: ObservableObject {
         cameraNode.camera?.zFar =
             1000
 
-        // Frames the whole bench from the left chamber end (x = -6)
-        // to the far side of the fusion chamber (x = ~14).
+        /*
+         Frames the complete equipment:
+
+             chamber left end  ≈ -6
+             fusion chamber    ≈ 10.4
+             fusion stage end  ≈ 14
+        */
+
         let sceneCenterX: Float = 4.0
 
         cameraNode.position =
@@ -1217,29 +1294,53 @@ final class QuarkResonatorSceneController: ObservableObject {
         running =
             state.running
 
-        updateDriver(state: state)
+        updateDriver(
+            state: state
+        )
 
-        updateActuator(state: state)
+        updateActuator(
+            state: state
+        )
 
-        updateMicroResonator(state: state)
+        updateMicroResonator(
+            state: state
+        )
 
-        updateSensor(state: state)
+        updateSensor(
+            state: state
+        )
 
-        updateCoupling(state: state)
+        updateCoupling(
+            state: state
+        )
 
-        updateOutput(state: state)
+        updateOutput(
+            state: state
+        )
 
-        updateCarrierPath(state: state)
+        updateCarrierPath(
+            state: state
+        )
 
-        updateFrequencyReadout(state: state)
+        updateFrequencyReadout(
+            state: state
+        )
+
+        // ----------------------------------------------------
+        // BBO
+        // ----------------------------------------------------
 
         bboStage.update(
             result: state.bboResult,
             running: state.running
         )
 
-        // UV leaving the BBO crystal feeds the fusion chamber.
-        let bbo = state.bboResult
+        // ----------------------------------------------------
+        // BBO UV → Fusion Chamber
+        // ----------------------------------------------------
+
+        let bbo =
+            state.bboResult
 
         let uvActive =
             state.running &&
@@ -1255,18 +1356,39 @@ final class QuarkResonatorSceneController: ObservableObject {
                     1.0,
                     bbo.conversionEfficiency.squareRoot()
                 )
-              )
+            )
             : 0.0
 
-        // Once the output is locked on the 1e15 Hz target the chamber runs its own sequence:
-        // EM coils -> hydrogen injection -> UV resonance -> fusion prediction.
+        /*
+         The controller establishes the physical position
+         of the fusion chamber.
+
+         The FusionChamberStageNode owns the proton geometry
+         and fusion-event visualization.
+
+         Therefore the fusion burst itself must be spawned
+         at the actual reaction midpoint inside
+         FusionChamberStageNode, rather than at (0, 0, 0).
+        */
+
         fusionChamber.update(
-            frequencyHz: state.outputFrequencyHz,
-            lockErrorFraction: state.frequencyLockErrorFraction,
-            targetLocked: state.targetFrequencyLocked,
-            uvStrength: uvStrength,
-            shellExcited: state.helium4ShellExcited,
-            running: state.running
+            frequencyHz:
+                state.outputFrequencyHz,
+
+            lockErrorFraction:
+                state.frequencyLockErrorFraction,
+
+            targetLocked:
+                state.targetFrequencyLocked,
+
+            uvStrength:
+                uvStrength,
+
+            shellExcited:
+                state.helium4ShellExcited,
+
+            running:
+                state.running
         )
     }
 
@@ -1281,7 +1403,7 @@ final class QuarkResonatorSceneController: ObservableObject {
         let frequencyRatio =
             targetFrequencyHz > 0
             ? currentFrequencyHz /
-              targetFrequencyHz
+                targetFrequencyHz
             : 0
 
         let proximity =
@@ -1417,7 +1539,8 @@ final class QuarkResonatorSceneController: ObservableObject {
         resonatorNode.opacity =
             0.65 +
             CGFloat(
-                response * 0.35
+                response *
+                0.35
             )
     }
 
@@ -1487,22 +1610,28 @@ final class QuarkResonatorSceneController: ObservableObject {
         couplingNode.opacity =
             0.35 +
             CGFloat(
-                energyScale * 0.65
+                energyScale *
+                0.65
             )
 
         couplingNode.scale =
             SCNVector3(
                 1 +
                 Float(
-                    energyScale * 0.10
+                    energyScale *
+                    0.10
                 ),
+
                 1 +
                 Float(
-                    energyScale * 0.10
+                    energyScale *
+                    0.10
                 ),
+
                 1 +
                 Float(
-                    energyScale * 0.10
+                    energyScale *
+                    0.10
                 )
             )
     }
@@ -1553,10 +1682,8 @@ final class QuarkResonatorSceneController: ObservableObject {
             running &&
             resonanceResponse > 0
 
-        for (
-            index,
-            particle
-        ) in carrierParticles.enumerated() {
+        for (index, particle)
+            in carrierParticles.enumerated() {
 
             if !active {
 
@@ -1589,7 +1716,8 @@ final class QuarkResonatorSceneController: ObservableObject {
 
             particle.position.x =
                 -3.7 +
-                normalized * 4.9
+                normalized *
+                4.9
 
             particle.position.y =
                 Float(
@@ -1611,7 +1739,8 @@ final class QuarkResonatorSceneController: ObservableObject {
                 SCNVector3(
                     1 +
                     Float(
-                        speed * 0.03
+                        speed *
+                        0.03
                     ),
                     1,
                     1
@@ -1636,7 +1765,8 @@ final class QuarkResonatorSceneController: ObservableObject {
         let relativeError =
             target > 0
             ? abs(
-                actual - target
+                actual -
+                target
             ) / target
             : 1
 
@@ -1654,7 +1784,7 @@ final class QuarkResonatorSceneController: ObservableObject {
             )
 
         let readout =
-            "OUTPUT  \(frequencyText) Hz   /   TARGET  \(targetText) Hz"
+            "OUTPUT \(frequencyText) Hz / TARGET \(targetText) Hz"
 
         frequencyReadoutNode?
             .geometry?
@@ -1863,6 +1993,4 @@ final class QuarkResonatorSceneController: ObservableObject {
         )
     }
 }
-
-
 
