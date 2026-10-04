@@ -24,8 +24,11 @@ struct ContentView: View {
 
     @StateObject private var engine = QuarkResonatorEngine()
     @StateObject private var sceneController = QuarkResonatorSceneController()
+    @StateObject private var fusionSimulator = FusionResonatorSimulator()
 
     @State private var timer: Timer?
+    @State private var showFusionSimulator = false
+    @State private var fusionZoomedIn = false
 
     private var estimatedShellEnergyEV: Double {
 
@@ -101,45 +104,82 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                liveActivityPanel          // ← moved to top of screen
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-
-                frequencyKey
-
-                QuarkResonatorSceneView(
-                    controller: sceneController,
-                    state: engine.state
-                )
-                .frame(minHeight: 320)
-                ScrollView {
-                    VStack(spacing: 12) {
-                        controlPanel
-                        //pipelineStagesPanel        // ← NEW
-                        //frequencyPanel
-                        bboPanel                   // ← NEW
-                        electricalPanel
-                        //resonancePanel
-                        energyPanel
-                        //hydrogenPanel
-                        //sweepPanel
-                        
+        if showFusionSimulator {
+            ZStack(alignment: .topTrailing) {
+                FusionResonatorSceneView(simulator: fusionSimulator, isZoomedIn: $fusionZoomedIn)
+                    .ignoresSafeArea()
+                VStack(alignment: .trailing, spacing: 10) {
+                    Button {
+                        showFusionSimulator = false
+                        fusionSimulator.stopSimulation()
+                    } label: {
+                        Text("Return")
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                            .padding(10)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
                     }
-                    .padding()
+                    Button {
+                        fusionZoomedIn.toggle()
+                    } label: {
+                        Text(fusionZoomedIn ? "Zoom Out" : "Zoom In")
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                            .padding(10)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
+                }
+                .padding()
+            }
+        } else {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    liveActivityPanel          // ← moved to top of screen
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+
+                    frequencyKey
+
+                    QuarkResonatorSceneView(
+                        controller: sceneController,
+                        state: engine.state
+                    )
+                    .frame(minHeight: 320)
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            controlPanel
+                            //pipelineStagesPanel        // ← NEW
+                            //frequencyPanel
+                            bboPanel                   // ← NEW
+                            electricalPanel
+                            //resonancePanel
+                            energyPanel
+                            //hydrogenPanel
+                            //sweepPanel
+                            
+                        }
+                        .padding()
+                    }
                 }
             }
-        }
-        .onAppear {
-            sceneController.update(state: engine.state)
-        }
-        .onDisappear {
-            stopTimer()
-            engine.stop()
+            .onAppear {
+                sceneController.update(state: engine.state)
+            }
+            .onDisappear {
+                stopTimer()
+                engine.stop()
+            }
+            .onChange(of: engine.state.outputFrequencyHz) { newValue in
+                if newValue >= 1.0e15 && !showFusionSimulator {
+                    showFusionSimulator = true
+                    fusionSimulator.startSimulation()
+                }
+            }
         }
     }
 
@@ -545,6 +585,10 @@ struct ContentView: View {
             Task { @MainActor in
                 engine.step(deltaTime: 0.016)
                 sceneController.update(state: engine.state)
+                if engine.state.outputFrequencyHz >= 1.0e15 && !showFusionSimulator {
+                    showFusionSimulator = true
+                    fusionSimulator.startSimulation()
+                }
             }
         }
     }
@@ -622,3 +666,4 @@ extension SCNNode {
 #Preview {
     ContentView()
 }
+

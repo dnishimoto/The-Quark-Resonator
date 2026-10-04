@@ -56,6 +56,13 @@ final class FusionResonatorSimulator: ObservableObject {
     private var fieldLinesNode: SCNNode!
     private var fusionEventsNode: SCNNode!
     private var haloLight: SCNNode!
+    
+    private var fusionReactorNodes: [SCNNode] = []
+
+    private var waveParticleNode: SCNNode?
+    private var waveParticlePhase: Double = 0.0
+    
+    private var cameraNode: SCNNode?
 
     // MARK: Controls
 
@@ -82,6 +89,9 @@ final class FusionResonatorSimulator: ObservableObject {
     @Published var reactionYieldScale: Double = 1.0
 
     @Published var autoLockEnabled: Bool = true
+
+    // Zoom control
+    @Published var isZoomedIn: Bool = false
 
     // MARK: Stage 1 — Resonance
 
@@ -186,6 +196,86 @@ final class FusionResonatorSimulator: ObservableObject {
     deinit {
         timer?.invalidate()
     }
+    
+    // MARK: Fusion Reactor Nodes
+    
+    func createFusionReactorNodes(count: Int) {
+        // Remove existing fusion reactor nodes
+        for node in fusionReactorNodes {
+            node.removeFromParentNode()
+        }
+        fusionReactorNodes.removeAll()
+        
+        // Fixed positions inside the chamber to place reactor nodes
+        // Positions selected roughly spaced inside radius ~5 around center
+        let positions: [SCNVector3] = [
+            SCNVector3(-4, 0, 0),
+            SCNVector3(4, 0, 0),
+            SCNVector3(0, 4, 0),
+            SCNVector3(0, -4, 0),
+            SCNVector3(-3, 3, 0),
+            SCNVector3(3, 3, 0),
+            SCNVector3(-3, -3, 0),
+            SCNVector3(3, -3, 0)
+        ]
+        
+        let countToUse = min(count, positions.count)
+        
+        for i in 0..<countToUse {
+            // Create a glowing capsule node to represent reactor unit
+            let capsule = SCNCapsule(capRadius: 0.4, height: 1.5)
+            let material = SCNMaterial()
+            material.emission.contents = UIColor.systemOrange
+            material.diffuse.contents = UIColor.orange.withAlphaComponent(0.7)
+            material.lightingModel = .physicallyBased
+            capsule.materials = [material]
+            
+            let node = SCNNode(geometry: capsule)
+            node.position = positions[i]
+            node.name = "FusionReactorNode"
+            
+            // Add a subtle pulsing animation for glow
+            let pulseUp = SCNAction.customAction(duration: 1.0) { (node, elapsedTime) in
+                let fraction = elapsedTime / 1.0
+                let glowIntensity = 0.6 + 0.4 * sin(fraction * .pi * 2)
+                material.emission.contents = UIColor.orange.withAlphaComponent(CGFloat(glowIntensity))
+            }
+            let pulse = SCNAction.repeatForever(pulseUp)
+            node.runAction(pulse)
+            
+            scene.rootNode.addChildNode(node)
+            fusionReactorNodes.append(node)
+        }
+    }
+    
+    private func removeFusionReactorNodes() {
+        for node in fusionReactorNodes {
+            node.removeFromParentNode()
+        }
+        fusionReactorNodes.removeAll()
+    }
+    
+    // MARK: Zoom Control
+    
+    func setZoomedIn(_ zoom: Bool) {
+        guard let cameraNode = cameraNode else { return }
+        isZoomedIn = zoom
+        
+        let lookAt = SCNVector3(0, 0, 0)
+        if zoom {
+            let newPos = SCNVector3(0, 3, 8)
+            let moveAction = SCNAction.move(to: newPos, duration: 0.6)
+            moveAction.timingMode = .easeInEaseOut
+            cameraNode.runAction(moveAction)
+            cameraNode.look(at: lookAt)
+        } else {
+            let newPos = SCNVector3(0, 12, 28)
+            let moveAction = SCNAction.move(to: newPos, duration: 0.6)
+            moveAction.timingMode = .easeInEaseOut
+            cameraNode.runAction(moveAction)
+            cameraNode.look(at: lookAt)
+        }
+    }
 
     // MARK: Scene Setup
 
@@ -198,6 +288,8 @@ final class FusionResonatorSimulator: ObservableObject {
         camera.position = SCNVector3(0, 12, 28)
         camera.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(camera)
+        
+        self.cameraNode = camera
 
         let ambient = SCNNode()
         ambient.light = SCNLight()
@@ -233,6 +325,32 @@ final class FusionResonatorSimulator: ObservableObject {
             .lightingModel = .constant
 
         scene.rootNode.addChildNode(chamber)
+        
+        // Add 3D text label above the chamber
+        let textGeometry = SCNText(string: "FUSION CHAMBER", extrusionDepth: 0.05)
+        textGeometry.font = UIFont.systemFont(ofSize: 0.26, weight: .bold)
+        textGeometry.firstMaterial?.diffuse.contents = UIColor.cyan
+        textGeometry.firstMaterial?.isDoubleSided = true
+        
+        let textNode = SCNNode(geometry: textGeometry)
+        // Center text pivot for better alignment
+        let (minBound, maxBound) = textGeometry.boundingBox
+        let textWidth = maxBound.x - minBound.x
+        let textHeight = maxBound.y - minBound.y
+        textNode.pivot = SCNMatrix4MakeTranslation(
+            (minBound.x + textWidth / 2),
+            minBound.y,
+            0
+        )
+        textNode.position = SCNVector3(0, 9.5, 0)
+        textNode.scale = SCNVector3(1, 1, 1)
+        
+        // Billboard constraint so text always faces the camera
+        let billboardConstraint = SCNBillboardConstraint()
+        billboardConstraint.freeAxes = .Y
+        textNode.constraints = [billboardConstraint]
+        
+        scene.rootNode.addChildNode(textNode)
 
         setupSuperCoils()
 
@@ -243,6 +361,25 @@ final class FusionResonatorSimulator: ObservableObject {
         scene.rootNode.addChildNode(fusionEventsNode)
 
         buildFieldLines()
+
+        createWaveParticle()
+    }
+
+    private func createWaveParticle() {
+        let radius: CGFloat = 0.2
+        let sphere = SCNSphere(radius: radius)
+        sphere.firstMaterial = SCNMaterial()
+        sphere.firstMaterial?.diffuse.contents = UIColor.cyan
+        sphere.firstMaterial?.emission.contents = UIColor.cyan
+        sphere.firstMaterial?.lightingModel = .constant
+        sphere.firstMaterial?.isDoubleSided = true
+
+        let node = SCNNode(geometry: sphere)
+        node.position = SCNVector3(0, 0, 18) // Source position outside the chamber
+        scene.rootNode.addChildNode(node)
+
+        waveParticleNode = node
+        waveParticlePhase = 0.0
     }
 
     private func setupSuperCoils() {
@@ -454,6 +591,10 @@ final class FusionResonatorSimulator: ObservableObject {
         fusionProbability = 0
         frameFusionEnergyMeV = 0
         frameEvents = 0
+
+        if waveParticleNode == nil {
+            createWaveParticle()
+        }
     }
 
     private func adjustHydrogenInventory() {
@@ -515,6 +656,8 @@ final class FusionResonatorSimulator: ObservableObject {
         }
 
         isRunning = true
+        
+        createFusionReactorNodes(count: 4)
 
         timer = Timer.scheduledTimer(
             withTimeInterval: 1.0 / 60.0,
@@ -530,6 +673,8 @@ final class FusionResonatorSimulator: ObservableObject {
         timer?.invalidate()
         timer = nil
         isRunning = false
+        
+        removeFusionReactorNodes()
     }
 
     func reset() {
@@ -570,6 +715,8 @@ final class FusionResonatorSimulator: ObservableObject {
 
         haloLight.light?.intensity = 0
         fieldLinesNode.isHidden = true
+        
+        removeFusionReactorNodes()
 
         resetHydrogen()
     }
@@ -582,6 +729,17 @@ final class FusionResonatorSimulator: ObservableObject {
 
     private func update() {
         let dt = 1.0 / 60.0
+
+        // Wave particle animation
+        if waveParticleNode == nil {
+            createWaveParticle()
+        }
+        waveParticlePhase += dt * targetFrequencyHz / 1e15 * 2.0 * Double.pi
+        let t = 0.5 * (1.0 + sin(waveParticlePhase))
+        let sourceZ: Float = 18.0
+        let targetZ: Float = 0.0
+        let posZ = sourceZ * Float(1.0 - t) + targetZ * Float(t)
+        waveParticleNode?.position = SCNVector3(0, 0, posZ)
 
         // Visual representation only.
         // It does not attempt to render the actual 1e15 Hz oscillation.
@@ -1170,3 +1328,4 @@ final class FusionResonatorSimulator: ObservableObject {
         }
     }
 }
+
